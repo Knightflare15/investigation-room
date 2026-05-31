@@ -1,4 +1,4 @@
-import { api } from '../api';
+import { API_BASE, api, authHeaders } from '../api';
 import type { BoardLinkResponse, SubmitTheoryResponse } from '../types';
 import { useGame } from './GameContext';
 
@@ -113,6 +113,41 @@ export function useGameActions() {
     }
   }
 
+  async function handleTalkStreaming(message: string): Promise<void> {
+    const { selectedCaseId, selectedSuspectId, alias } = state;
+    if (!selectedCaseId || !selectedSuspectId || !message.trim()) return;
+    // Optimistically show the detective's turn plus an empty suspect bubble to fill in.
+    dispatch({ type: 'APPEND_TRANSCRIPT_TURN', payload: { suspectId: selectedSuspectId, turn: { speaker: 'detective', text: message } } });
+    const suspectName = state.caseDetail?.suspects.find((s) => s.id === selectedSuspectId)?.display_name ?? 'Suspect';
+    dispatch({ type: 'APPEND_TRANSCRIPT_TURN', payload: { suspectId: selectedSuspectId, turn: { speaker: suspectName, text: '' } } });
+
+    let accumulated = '';
+    try {
+      const response = await fetch(`${API_BASE}/cases/${selectedCaseId}/suspects/${selectedSuspectId}/talk/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders(alias)) },
+        body: JSON.stringify({ message }),
+      });
+      if (!response.ok || !response.body) throw new Error('stream unavailable');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        for (const line of decoder.decode(value, { stream: true }).split('\n')) {
+          if (line.startsWith('data: ') && !line.includes('[DONE]') && !line.includes('[ERROR]')) {
+            accumulated += line.slice(6);
+            dispatch({ type: 'UPDATE_STREAMING_REPLY', payload: { suspectId: selectedSuspectId, text: accumulated } });
+          }
+        }
+      }
+      await refreshCaseState();
+    } catch {
+      // Streaming unavailable — fall back to the standard non-streaming talk flow.
+      await handleTalk(message);
+    }
+  }
+
   async function handleConfront(evidenceId: string, message: string): Promise<void> {
     const suspectId = state.selectedSuspectId;
     if (!state.selectedCaseId || !suspectId || !evidenceId) return;
@@ -165,6 +200,7 @@ export function useGameActions() {
     handleSearch,
     handleRescan,
     handleTalk,
+    handleTalkStreaming,
     handleConfront,
     handleBoardLink,
     handleSubmitTheory,

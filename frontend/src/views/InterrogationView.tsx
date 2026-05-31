@@ -1,9 +1,6 @@
-import { type FormEvent, useRef, useState } from 'react';
-import type { CaseDetailResponse, CaseDocument, ConversationState, PlayerCaseState, Suspect } from '../types';
-import type { ClueCard } from '../hooks/useGameState';
+import { type FormEvent, useState } from 'react';
+import type { CaseDetailResponse, CaseDocument, ClueCard, ConversationState, PlayerCaseState, Suspect } from '../types';
 import { MediaPlate, PanelHeader } from '../ui';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
 
 type Props = {
   caseDetail: CaseDetailResponse;
@@ -31,56 +28,16 @@ export default function InterrogationView({
 }: Props) {
   const [messageDraft, setMessageDraft] = useState('');
   const [confrontEvidenceId, setConfrontEvidenceId] = useState('');
-  const [streamingReply, setStreamingReply] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
-  const aliasRef = useRef<string>('');
 
   const activeConversation = selectedSuspect ? conversations[selectedSuspect.id] : undefined;
-
-  async function handleTalkStreaming(message: string, alias: string) {
-    if (!selectedSuspect) return;
-    setIsStreaming(true);
-    setStreamingReply('');
-    let accumulated = '';
-    try {
-      const response = await fetch(
-        `${API_BASE}/cases/${caseDetail.case.id}/suspects/${selectedSuspect.id}/talk/stream`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Player-Alias': alias },
-          body: JSON.stringify({ message }),
-        },
-      );
-      if (!response.ok || !response.body) throw new Error('Stream unavailable');
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        for (const line of decoder.decode(value, { stream: true }).split('\n')) {
-          if (line.startsWith('data: ') && !line.includes('[DONE]') && !line.includes('[ERROR]')) {
-            accumulated += line.slice(6);
-            setStreamingReply(accumulated);
-          }
-        }
-      }
-    } catch {
-      // Streaming unavailable — fall back to standard talk
-      await onTalk(message);
-    } finally {
-      setIsStreaming(false);
-      setStreamingReply('');
-      // Let the parent refresh conversations via onTalk side-effect path
-      if (accumulated) await onTalk(message);
-    }
-  }
 
   async function handleTalk(event: FormEvent) {
     event.preventDefault();
     if (!selectedSuspect || !messageDraft.trim()) return;
     const msg = messageDraft;
     setMessageDraft('');
-    await handleTalkStreaming(msg, aliasRef.current || 'Detective');
+    // onTalk is wired to the streaming action; the live reply renders from the transcript.
+    await onTalk(msg);
   }
 
   async function handleConfront() {
@@ -254,12 +211,6 @@ export default function InterrogationView({
                 <p>{turn.text}</p>
               </div>
             ))}
-            {isStreaming && streamingReply ? (
-              <div className="bubble suspect">
-                <strong>{selectedSuspect?.display_name ?? 'Suspect'}</strong>
-                <p>{streamingReply}<span className="streaming-cursor">▋</span></p>
-              </div>
-            ) : null}
           </div>
           <form className="conversation-form" onSubmit={handleTalk}>
             <textarea

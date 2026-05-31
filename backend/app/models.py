@@ -310,6 +310,15 @@ class CreateCaseRequest(BaseModel):
     estimated_minutes: int = 45
 
 
+class SessionRequest(BaseModel):
+    alias: str
+
+
+class SessionResponse(BaseModel):
+    token: str
+    alias: str
+
+
 class UploadAssetResponse(BaseModel):
     path: str
     url: str

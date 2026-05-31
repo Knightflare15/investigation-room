@@ -114,6 +114,20 @@ class DialogueService:
             trust_delta=int(parsed.get("trust_delta", 0)),
         )
 
+    def score_reply(
+        self,
+        suspect: SuspectConfig,
+        conversation: ConversationState,
+        player_message: str,
+        evidence: CaseDocument | None,
+    ) -> DialogueOutcome:
+        """Compute deterministic state deltas without an LLM call.
+
+        Returns a full DialogueOutcome; callers that already have a reply (e.g. streaming)
+        use only the delta fields and discard the heuristic reply text.
+        """
+        return self._heuristic_response(suspect, conversation, player_message, evidence)
+
     def _heuristic_response(
         self,
         suspect: SuspectConfig,

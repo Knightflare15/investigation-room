@@ -14,7 +14,7 @@ import type {
   SubmitTheoryResponse,
 } from './types';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
+export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
 
 function resolveApiUrl(path?: string | null) {
   if (!path) return path ?? null;
@@ -84,12 +84,45 @@ function normalizeAuthoringBundle(bundle: AuthoringBundle): AuthoringBundle {
   };
 }
 
+// alias -> signed bearer token. Persisted to localStorage so a reload skips the handshake.
+const tokenCache = new Map<string, string>();
+
+function tokenStorageKey(alias: string) {
+  return `investigation-room-token::${alias}`;
+}
+
+/** Return a signed session token for the alias, registering one via POST /session if needed. */
+export async function ensureToken(alias: string): Promise<string> {
+  const cached = tokenCache.get(alias) ?? localStorage.getItem(tokenStorageKey(alias)) ?? undefined;
+  if (cached) {
+    tokenCache.set(alias, cached);
+    return cached;
+  }
+  const response = await fetch(`${API_BASE}/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alias }),
+  });
+  if (!response.ok) {
+    throw new Error(`Session registration failed: ${response.status}`);
+  }
+  const { token } = (await response.json()) as { token: string; alias: string };
+  tokenCache.set(alias, token);
+  localStorage.setItem(tokenStorageKey(alias), token);
+  return token;
+}
+
+export async function authHeaders(alias: string): Promise<Record<string, string>> {
+  return { Authorization: `Bearer ${await ensureToken(alias)}` };
+}
+
 async function request<T>(path: string, alias: string, init?: RequestInit): Promise<T> {
+  const token = await ensureToken(alias);
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      'X-Player-Alias': alias,
+      Authorization: `Bearer ${token}`,
       ...(init?.headers ?? {}),
     },
   });
@@ -204,9 +237,7 @@ export const api = {
     formData.append('file', file);
     const response = await fetch(`${API_BASE}/authoring/cases/${caseId}/assets`, {
       method: 'POST',
-      headers: {
-        'X-Player-Alias': alias,
-      },
+      headers: await authHeaders(alias),
       body: formData,
     });
     if (!response.ok) {

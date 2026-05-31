@@ -203,24 +203,35 @@ class GameService:
         )
 
     def stream_talk_to_suspect(self, case_id: str, player_alias: str, suspect_id: str, message: str):
-        """Yield reply tokens for SSE streaming, then persist conversation state."""
+        """Yield reply tokens for SSE streaming, then persist the streamed reply.
+
+        Uses a single generation: the visible reply is streamed token-by-token, and the
+        exact text the player saw is what gets persisted. State deltas (trust, guardedness,
+        suspicion, revealed facts) are computed deterministically via the heuristic scorer
+        with NO second LLM call, so the streamed reply and the saved reply never diverge.
+        """
         state = self.get_or_create_state(case_id, player_alias)
         case = self.get_case(case_id)
         suspect = self._resolve_suspect(case, state, suspect_id)
         conversation = self._get_conversation(case_id, player_alias, suspect_id)
-        # Yield tokens from Ollama (or fallback)
-        yield from self.dialogue.stream_reply(case, suspect, conversation, state, message)
-        # After streaming, persist a full dialogue round so state updates
-        outcome = self.dialogue.generate(case, suspect, conversation, state, message)
+
+        chunks: list[str] = []
+        for token in self.dialogue.stream_reply(case, suspect, conversation, state, message):
+            chunks.append(token)
+            yield token
+        full_reply = "".join(chunks)
+
+        # Deterministic deltas only — reuse the heuristic scorer but keep the streamed text.
+        deltas = self.dialogue.score_reply(suspect, conversation, message, None)
         conversation.transcript.append(ConversationTurn(speaker="detective", text=message))
-        conversation.transcript.append(ConversationTurn(speaker=suspect.display_name, text=outcome.reply))
-        conversation.trust = max(0, min(100, conversation.trust + outcome.trust_delta))
-        conversation.guardedness = max(0, min(100, conversation.guardedness + outcome.guardedness_delta))
-        conversation.revealed_fact_ids = list(dict.fromkeys(conversation.revealed_fact_ids + outcome.revealed_fact_ids))
-        if outcome.new_context:
-            conversation.memory_summary = f"Topics pressed: {', '.join(outcome.new_context[:4])}"
-        state.suspicion_level = max(0, min(100, state.suspicion_level + outcome.suspicion_delta))
-        for context in outcome.new_context:
+        conversation.transcript.append(ConversationTurn(speaker=suspect.display_name, text=full_reply))
+        conversation.trust = max(0, min(100, conversation.trust + deltas.trust_delta))
+        conversation.guardedness = max(0, min(100, conversation.guardedness + deltas.guardedness_delta))
+        conversation.revealed_fact_ids = list(dict.fromkeys(conversation.revealed_fact_ids + deltas.revealed_fact_ids))
+        if deltas.new_context:
+            conversation.memory_summary = f"Topics pressed: {', '.join(deltas.new_context[:4])}"
+        state.suspicion_level = max(0, min(100, state.suspicion_level + deltas.suspicion_delta))
+        for context in deltas.new_context:
             if context not in state.discovered_contexts:
                 state.discovered_contexts.append(context)
         state.current_objective = "Rescan the archive with what you just learned."

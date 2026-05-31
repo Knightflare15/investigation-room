@@ -112,7 +112,7 @@ function CaseShell() {
                 conversations={conversations}
                 clueCards={state.clueCards}
                 followUpPrompts={state.followUpPrompts}
-                onTalk={actions.handleTalk}
+                onTalk={actions.handleTalkStreaming}
                 onConfront={actions.handleConfront}
                 onOpenAttachment={openDocumentAttachment}
               />
@@ -139,7 +139,7 @@ function CaseShell() {
               <SubmissionView
                 caseDetail={caseDetail}
                 saveState={currentState}
-                pinnedDocuments={state.pinnedDocuments as unknown as CaseDocument[]}
+                pinnedDocuments={state.pinnedDocuments}
                 onSubmitTheory={actions.handleSubmitTheory}
                 onNavigateToCommunity={() => navigate(`/${caseId}/community`)}
               />
@@ -358,10 +358,10 @@ function AppShell() {
           <section className="rail-panel">
             <div className="rail-heading">
               <span>Pinned Evidence</span>
-              <strong>{(state.pinnedDocuments as unknown as CaseDocument[]).length.toString().padStart(2, '0')}</strong>
+              <strong>{state.pinnedDocuments.length.toString().padStart(2, '0')}</strong>
             </div>
             <div className="pinboard-grid">
-              {(state.pinnedDocuments as unknown as CaseDocument[]).slice(0, 4).map((doc) => (
+              {state.pinnedDocuments.slice(0, 4).map((doc) => (
                 <button
                   key={doc.id}
                   className="pinboard-card"

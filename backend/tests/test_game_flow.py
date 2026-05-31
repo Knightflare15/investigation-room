@@ -58,6 +58,18 @@ class GameFlowTests(unittest.TestCase):
         self.assertTrue(response.saved)
         self.assertEqual(response.stats.culprit_counts["sus_mara"], 1)
 
+    def test_case_detail_does_not_leak_private_suspect_data(self) -> None:
+        detail = self.game.get_case_detail("case-001", self.alias)
+        payload = detail.model_dump(mode="json")
+        self.assertTrue(payload["suspects"], "expected at least one unlocked suspect")
+        for suspect in payload["suspects"]:
+            self.assertNotIn("private_truth", suspect)
+            self.assertNotIn("dialogue_rules", suspect)
+            self.assertNotIn("memory_rules", suspect)
+            # public fields the UI relies on must still be present
+            self.assertIn("public_profile", suspect)
+            self.assertIn("display_name", suspect)
+
 
 if __name__ == "__main__":
     unittest.main()

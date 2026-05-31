@@ -15,6 +15,7 @@ class Settings:
     ollama_chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1:8b")
     ollama_embed_model: str = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
     default_alias: str = "Consultant"
+    secret_key: str = os.getenv("INVESTIGATION_SECRET_KEY", "dev-insecure-key")
     cors_origins: tuple[str, ...] = tuple(
         o.strip()
         for o in os.getenv("INVESTIGATION_CORS_ORIGINS", "http://localhost:5173").split(",")

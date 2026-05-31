@@ -1,18 +1,18 @@
 import { createContext, type ReactNode, useContext, useReducer } from 'react';
 import type {
-  BoardLinkResponse,
   CaseDetailResponse,
+  CaseDocument,
   CaseSummary,
+  ClueCard,
   CommunityStatsResponse,
+  ContradictionItem,
   ConversationState,
   ConversationTurn,
   PlayerCaseState,
   RescanResponse,
   SearchResult,
-  SubmitTheoryResponse,
   Suspect,
 } from '../types';
-import type { ClueCard, ContradictionItem } from '../hooks/useGameState';
 
 export type ViewMode = 'intake' | 'archive' | 'interrogation' | 'board' | 'submission' | 'community' | 'authoring';
 
@@ -38,7 +38,7 @@ export type GameState = {
   error: string;
   // derived — kept in state so views don't recompute independently
   unlockedSuspects: Suspect[];
-  pinnedDocuments: never[]; // populated by useGameActions after load
+  pinnedDocuments: CaseDocument[];
   boardNodes: Array<{ id: string; label: string }>;
   folderCounts: Array<[string, number]>;
   contradictionItems: ContradictionItem[];
@@ -145,7 +145,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'SET_SAVE_STATE': {
       const ss = action.payload;
       const unlockedDocuments = state.caseDetail?.documents ?? [];
-      const pinnedDocuments = unlockedDocuments.filter((d) => ss.pinned_evidence_ids.includes(d.id)) as never[];
+      const pinnedDocuments = unlockedDocuments.filter((d) => ss.pinned_evidence_ids.includes(d.id));
       const seeds = ss.discovered_contexts;
       const contradictionItems: ContradictionItem[] = seeds
         .slice(-4)
@@ -222,8 +222,15 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...state, error: '' };
     case 'APPEND_TRANSCRIPT_TURN': {
       const { suspectId, turn } = action.payload;
-      const existing = state.conversations[suspectId];
-      if (!existing) return state;
+      const existing: ConversationState = state.conversations[suspectId] ?? {
+        suspect_id: suspectId,
+        trust: 50,
+        guardedness: 25,
+        revealed_fact_ids: [],
+        confronted_evidence_ids: [],
+        memory_summary: '',
+        transcript: [],
+      };
       return {
         ...state,
         conversations: {

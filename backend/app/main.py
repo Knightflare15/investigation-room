@@ -7,8 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .auth import issue_token
 from .config import settings
-from .dependencies import get_alias, get_authoring_service, get_game_service
+from .dependencies import get_authoring_service, get_game_service, get_player
 from .models import (
     AuthoringBundle,
     BoardLinkRequest,
@@ -16,6 +17,8 @@ from .models import (
     CreateCaseRequest,
     RescanRequest,
     SearchRequest,
+    SessionRequest,
+    SessionResponse,
     SubmitTheoryRequest,
     TalkRequest,
     TogglePinRequest,
@@ -39,6 +42,17 @@ def health():
     return {"status": "ok"}
 
 
+@app.post("/session", response_model=SessionResponse)
+def create_session(payload: SessionRequest):
+    """Issue a signed token binding the chosen alias to the server secret.
+
+    The prototype has no passwords — registering an alias is enough to obtain an
+    unspoofable identity. Clients send the returned token as `Authorization: Bearer <token>`.
+    """
+    alias = payload.alias.strip() or settings.default_alias
+    return SessionResponse(token=issue_token(alias), alias=alias)
+
+
 @app.get("/cases")
 def list_cases(game: Annotated[GameService, Depends(get_game_service)]):
     return game.list_cases()
@@ -48,7 +62,7 @@ def list_cases(game: Annotated[GameService, Depends(get_game_service)]):
 def get_case(
     case_id: str,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     try:
         return game.get_case_detail(case_id, alias)
@@ -60,7 +74,7 @@ def get_case(
 def get_save_state(
     case_id: str,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     try:
         return game.get_save_state(case_id, alias)
@@ -73,7 +87,7 @@ def search_case(
     case_id: str,
     payload: SearchRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     try:
         return game.search_case(case_id, alias, payload)
@@ -86,7 +100,7 @@ def rescan_case(
     case_id: str,
     payload: RescanRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     try:
         return game.rescan_case(case_id, alias, payload)
@@ -100,7 +114,7 @@ def talk_to_suspect(
     suspect_id: str,
     payload: TalkRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     try:
         return game.talk_to_suspect(case_id, alias, suspect_id, payload.message)
@@ -114,7 +128,7 @@ def talk_to_suspect_stream(
     suspect_id: str,
     payload: TalkRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     def event_generator():
         try:
@@ -133,7 +147,7 @@ def confront_suspect(
     suspect_id: str,
     payload: ConfrontRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     try:
         return game.confront_suspect(case_id, alias, suspect_id, payload)
@@ -146,7 +160,7 @@ def add_board_link(
     case_id: str,
     payload: BoardLinkRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     try:
         return game.add_board_link(case_id, alias, payload)
@@ -159,7 +173,7 @@ def toggle_pin(
     case_id: str,
     payload: TogglePinRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     try:
         return game.toggle_pin(case_id, alias, payload)
@@ -172,7 +186,7 @@ def submit_theory(
     case_id: str,
     payload: SubmitTheoryRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_alias)],
+    alias: Annotated[str, Depends(get_player)],
 ):
     try:
         return game.submit_theory(case_id, alias, payload)

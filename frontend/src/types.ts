@@ -250,3 +250,14 @@ export type CreateCaseRequest = {
   difficulty: string;
   estimated_minutes: number;
 };
+
+export type ContradictionItem = {
+  title: string;
+  severity: 'high' | 'medium' | 'low';
+  source: string;
+};
+
+export type ClueCard = {
+  text: string;
+  type: 'location' | 'intent' | 'behavior' | 'mindset';
+};

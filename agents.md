@@ -5,6 +5,82 @@ Each entry lists what changed, which files were touched, and why.
 
 ---
 
+## Session 2 — Hardening Pass (2026-05-31)
+
+A code review of the Session 1 commit (`0b7216b`) surfaced two streaming correctness bugs, dead
+code from the hook→context migration, missing test coverage, and the still-open spoofable-alias
+gap. All four were fixed.
+
+### Step A — Interrogation streaming: single LLM call + correct identity
+
+**Problem:** one user message triggered up to three model invocations — the frontend called
+`/talk` again after the stream finished, and the backend streamed a plain-text reply then called
+`dialogue.generate()` (JSON mode) a second time to persist, so the text the player watched type
+out differed from what was saved. Streaming also always posted as `'Detective'` (an unset
+`aliasRef`), corrupting per-player state.
+
+**Fix:**
+- `backend/app/services/dialogue.py`: added public `score_reply()` (thin wrapper over the
+  deterministic `_heuristic_response`) that returns state deltas without an LLM call.
+- `backend/app/services/game.py`: `stream_talk_to_suspect` now accumulates the streamed tokens and
+  persists *that exact text*; deltas come from `score_reply` — no second generation.
+- `frontend/src/context/useGameActions.ts`: new `handleTalkStreaming(message)` owns the SSE fetch,
+  dispatches `APPEND_TRANSCRIPT_TURN` (detective + empty suspect bubble) then streams via
+  `UPDATE_STREAMING_REPLY`, and calls `refreshCaseState()` once at the end. Falls back to
+  `handleTalk` if the stream is unavailable. Uses the real `state.alias`.
+- `frontend/src/context/GameContext.tsx`: `APPEND_TRANSCRIPT_TURN` now creates a default
+  conversation when a suspect has none yet (previously dropped the turn).
+- `frontend/src/views/InterrogationView.tsx`: stripped local streaming state / `aliasRef` / the
+  duplicate `onTalk` call; the live bubble renders from the transcript. `onTalk` is wired to
+  `actions.handleTalkStreaming` in `App.tsx`.
+
+### Step B — Dead code removal
+
+- Deleted `frontend/src/hooks/useGameState.ts` and `useSearch.ts` (never called after the Phase 3
+  context migration; only their types were still imported).
+- Moved `ClueCard` and `ContradictionItem` type definitions into `frontend/src/types.ts`; updated
+  `GameContext.tsx` and `InterrogationView.tsx` to import from there.
+- Retyped `pinnedDocuments` from `never[]` to `CaseDocument[]` in `GameContext.tsx`; removed the
+  three `as unknown as CaseDocument[]` casts in `App.tsx`.
+- Kept `APPEND_TRANSCRIPT_TURN` / `UPDATE_STREAMING_REPLY` — Step A made them live.
+
+### Step C — Unspoofable player identity (signed tokens, stdlib only)
+
+`itsdangerous` was not installed, so the token is built with Python's stdlib (`hmac` + `hashlib` +
+`base64`) — no new dependency.
+
+- `backend/app/config.py`: added `secret_key` (env `INVESTIGATION_SECRET_KEY`).
+- New `backend/app/auth.py`: `issue_token(alias)` → `<b64url(payload)>.<b64url(hmac-sha256)>`;
+  `read_token(token)` verifies the signature with `hmac.compare_digest` and returns the alias or
+  `None`.
+- `backend/app/main.py`: new `POST /session` issues a token for an alias; all routes now depend on
+  `get_player`.
+- `backend/app/dependencies.py`: `get_alias` replaced by `get_player`, which reads
+  `Authorization: Bearer <token>` and raises 401 on missing/invalid tokens.
+- `backend/app/models.py`: added `SessionRequest` / `SessionResponse`.
+- `frontend/src/api.ts`: transparent token cache (per-alias, persisted to localStorage); `request()`
+  and the multipart upload now send `Authorization: Bearer`; exported `API_BASE`, `ensureToken`,
+  `authHeaders`. The streaming fetch in `useGameActions.ts` uses `authHeaders`. New aliases handshake
+  lazily on first request.
+
+### Step D — Test coverage (12 tests pass, up from 6)
+
+- `test_game_flow.py`: added a leak test asserting case-detail suspects expose no `private_truth` /
+  `dialogue_rules` / `memory_rules`.
+- New `test_streaming.py`: drains `stream_talk_to_suspect` (Ollama unreachable → heuristic
+  fallback) and asserts exactly one detective + one suspect turn whose text equals the streamed
+  text — proving the no-double-call fix.
+- New `test_auth.py`: token issue/read round-trip, tampered-payload rejection, garbage/missing
+  rejection.
+- New `test_postgres_dialect.py`: mocks `psycopg.connect` so `PostgresDatabase` runs without a
+  server; asserts `%s` placeholders (not `?`) and `Jsonb`-wrapped JSON params.
+
+**Files created:** `backend/app/auth.py`, `backend/tests/test_streaming.py`,
+`backend/tests/test_auth.py`, `backend/tests/test_postgres_dialect.py`
+**Files deleted:** `frontend/src/hooks/useGameState.ts`, `frontend/src/hooks/useSearch.ts`
+
+---
+
 ## Session 1 — Full Architectural Refactor (2026-05-31)
 
 ### Phase 1 — Backend Fixes
