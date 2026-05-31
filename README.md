@@ -1,88 +1,260 @@
 # Investigation Room
 
-Investigation Room is a hosted detective game prototype where the player acts as a specialist investigator reviewing a stalled police case from a single operations room. The game combines a dossier-style React frontend with a FastAPI backend, Ollama-powered suspect conversations, archive search, rescans, and community theory submissions.
+Investigation Room is a full-stack AI investigation platform built around authored mystery cases. Players review a police first-pass archive, question suspects through Ollama-backed dialogue, rescan the archive with newly discovered context, and submit a final theory. The project includes a React/Vite dossier interface, a FastAPI backend, persistent player state, and a case authoring pipeline for JSON, Markdown, and visual assets.
 
-## Project Structure
+## What the application does
+
+- Loads authored cases from `cases/<case-id>/`
+- Serves a dossier-style frontend for intake, archive review, interrogation, theory building, submission, community results, and authoring
+- Uses server-side retrieval over unlocked case documents
+- Uses Ollama for suspect dialogue and embeddings when available
+- Falls back to deterministic retrieval and dialogue heuristics when Ollama is unavailable
+- Persists player progress, suspect conversation state, and theory submissions in SQLite or PostgreSQL
+
+## Architecture
+
+### Backend
+
+- `FastAPI` application in `backend/app/main.py`
+- `GameService` in `backend/app/services/game.py` orchestrates state, retrieval, dialogue, rescans, board links, and submissions
+- `RetrievalService` in `backend/app/services/retrieval.py` performs paragraph-level search using:
+  - token overlap
+  - entity-tag matches
+  - optional Ollama embeddings via `/api/embed`
+- `DialogueService` in `backend/app/services/dialogue.py` performs:
+  - Ollama chat calls via `/api/chat`
+  - heuristic fallback responses and state deltas
+  - SSE token streaming for suspect replies
+- `AuthoringService` in `backend/app/services/authoring.py` scaffolds and saves cases, documents, prompts, and uploaded assets
+- `case_loader.py` loads JSON/Markdown case content from disk and resolves case asset URLs
+
+### Frontend
+
+- `React + Vite + TypeScript`
+- Main UI shell in `frontend/src/App.tsx`
+- API client in `frontend/src/api.ts`
+- Authoring UI in `frontend/src/AuthoringStudio.tsx`
+- Shared UI primitives in `frontend/src/ui.tsx`
+- Styling in `frontend/src/styles.css`
+
+### Persistence
+
+Database code lives in `backend/app/database.py`.
+
+Supported backends:
+
+- SQLite by default
+- PostgreSQL when `INVESTIGATION_DATABASE_URL` is set
+
+Stored data:
+
+- player case state
+- unlocked documents and suspects
+- pinned evidence
+- board links
+- rescan history
+- discovered contexts
+- per-suspect conversation state
+- community theory submissions
+
+### Authentication
+
+The project uses lightweight signed sessions rather than passwords.
+
+- `POST /session` issues an HMAC-signed token for an alias
+- the frontend stores that token in `localStorage`
+- protected API routes require `Authorization: Bearer <token>`
+
+Auth implementation:
+
+- `backend/app/auth.py`
+- `backend/app/dependencies.py`
+
+## Repository layout
 
 ```text
-backend/              FastAPI API, persistence, retrieval, dialogue, tests
-cases/                Authored cases using JSON + Markdown evidence files
-frontend/             React + Vite dossier interface
+backend/
+  app/
+    main.py
+    models.py
+    database.py
+    case_loader.py
+    services/
+  tests/
+
+cases/
+  case-001/
+    case.json
+    suspects.json
+    archive/
+    prompts/
+    assets/
+      suspects/
+      evidence/
+      locations/
+
+frontend/
+  src/
 ```
 
-## Features
+## Current sample case
 
-- Police first-pass intake with known suspects and evidence
-- Freeform suspect interrogation with evidence confrontation
-- Archive search and context-aware rescans
-- Unlockable documents and suspects through rescan and board links
-- Persistent player case state and suspect memory
-- Theory submission with community accusation splits and excerpts
-- Built-in case authoring studio with image uploads for suspects, evidence, and location dossiers
-- Premium dossier-style investigation UI with parchment readers, brass accents, and structured intelligence rails
+The repository ships with a working sample case:
 
-## Visual Design
+- `cases/case-001/case.json`
+- `cases/case-001/suspects.json`
+- `cases/case-001/archive`
 
-The frontend now uses a darker detective-dossier visual system inspired by a late-Victorian evidence desk rather than a generic admin panel.
+This sample is useful both as a playable reference and as the template for authoring new cases.
 
-- Headings and case titles use `Cormorant Garamond`
-- Navigation labels and chrome use `Cinzel`
-- Body copy and archive text use `Source Serif 4`
-- Missing images render as intentional placeholders instead of broken image boxes
+## API surface
 
-This means the app is fully usable before you add any real art.
+Implemented routes:
 
-## Backend Setup
+- `GET /health`
+- `POST /session`
+- `GET /cases`
+- `GET /cases/{case_id}`
+- `GET /cases/{case_id}/save-state`
+- `POST /cases/{case_id}/search`
+- `POST /cases/{case_id}/rescan`
+- `POST /cases/{case_id}/suspects/{suspect_id}/talk`
+- `POST /cases/{case_id}/suspects/{suspect_id}/talk/stream`
+- `POST /cases/{case_id}/suspects/{suspect_id}/confront`
+- `POST /cases/{case_id}/board/link`
+- `POST /cases/{case_id}/pin-evidence`
+- `POST /cases/{case_id}/submit-theory`
+- `GET /cases/{case_id}/community-stats`
+- `GET /authoring/cases`
+- `POST /authoring/cases`
+- `GET /authoring/cases/{case_id}`
+- `PUT /authoring/cases/{case_id}`
+- `POST /authoring/cases/{case_id}/assets`
 
-Use the bundled Python runtime if system Python is unavailable:
+Static case assets are served from:
+
+- `/case-assets/...`
+
+## Setup
+
+### Backend
 
 ```powershell
+cd C:\Users\Aryan\Documents\RAG_Project
 & "C:\Users\Aryan\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -r backend/requirements.txt
+pip install -r backend\requirements.txt
 uvicorn backend.app.main:app --reload
 ```
 
-Environment variables:
+Backend default URL:
+
+- `http://127.0.0.1:8000`
+
+### Frontend
+
+```powershell
+cd C:\Users\Aryan\Documents\RAG_Project\frontend
+npm install
+npm run dev
+```
+
+Frontend default URL:
+
+- `http://127.0.0.1:5173`
+
+## Environment variables
+
+Supported settings are defined in `backend/app/config.py`.
+
+Important variables:
 
 ```text
 INVESTIGATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/investigation_room
 INVESTIGATION_DB_PATH=backend/data/investigation_room.db
+INVESTIGATION_SECRET_KEY=dev-insecure-key
+INVESTIGATION_CORS_ORIGINS=http://localhost:5173
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_CHAT_MODEL=llama3.1:8b
 OLLAMA_EMBED_MODEL=nomic-embed-text
 ```
 
-`INVESTIGATION_DATABASE_URL` takes precedence over `INVESTIGATION_DB_PATH`. If it is unset, the app uses local SQLite.
+Notes:
 
-## Frontend Setup
+- `INVESTIGATION_DATABASE_URL` takes precedence over `INVESTIGATION_DB_PATH`
+- if no PostgreSQL URL is provided, SQLite is used
+- `.env.example` currently includes the main Ollama and PostgreSQL settings
 
-```powershell
-cd frontend
-npm install
-npm run dev
+## PostgreSQL
+
+To run against PostgreSQL instead of SQLite:
+
+1. Start PostgreSQL
+2. Create the database:
+
+```sql
+CREATE DATABASE investigation_room;
 ```
 
-The frontend expects the backend at `http://127.0.0.1:8000` by default. Override with `VITE_API_BASE_URL`.
+3. Set the connection string:
 
-## Authoring Your Own Mysteries
+```powershell
+$env:INVESTIGATION_DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/investigation_room"
+```
 
-Open the frontend and switch to the `authoring` tab. The authoring studio lets you:
+4. Start the backend
 
-- scaffold a new case folder under `cases/`
-- upload suspect photos, evidence images, and location images
-- edit case metadata, police intake, dossiers, suspects, and evidence documents
-- save prompts and advanced rescan or board-link rules back to disk
+There is also a helper compose file:
 
-Generated case layout:
+```powershell
+docker compose -f docker-compose.postgres.yml up -d
+```
+
+## Ollama integration
+
+The backend tries Ollama first and falls back when local models are unavailable.
+
+Used for:
+
+- suspect dialogue generation
+- streaming suspect replies
+- embeddings for semantic retrieval
+
+Suggested local models:
+
+```powershell
+ollama pull llama3.1:8b
+ollama pull nomic-embed-text
+```
+
+Fallback behavior:
+
+- retrieval still works using token overlap and entity matches
+- suspect dialogue still works using heuristic responses and deterministic state deltas
+
+## How case loading works
+
+Case loading is implemented in `backend/app/case_loader.py`.
+
+At startup and after authoring updates, the backend:
+
+- reads `case.json`
+- reads `suspects.json`
+- reads every Markdown document in `archive/`
+- reads prompt text files from `prompts/`
+- resolves relative asset paths into `/case-assets/...` URLs
+
+## Case format
+
+Expected structure:
 
 ```text
 cases/
-  your-case-id/
+  <case-id>/
     case.json
     suspects.json
     archive/
-      doc-001-...
+      doc-001-*.md
     prompts/
       interrogation_system.txt
       hint_system.txt
@@ -92,76 +264,142 @@ cases/
       locations/
 ```
 
-The app does not require those folders to contain anything yet. If an image path is missing, the UI shows:
+### `case.json`
 
-- a framed silhouette plate for suspects
-- a pinned blank evidence plate for documents
-- a faded dossier/map placeholder for locations and cover art
+Contains:
 
-Image fields now work in three places:
+- case metadata
+- initial unlocked suspects and documents
+- open questions
+- archive domains
+- location dossiers
+- rescan rules
+- valid board links
+- submission requirements
 
-- `case.json`
-  - `cover_image_path`
-  - `archive_domains[].image_path`
-  - `location_dossiers[].image_path`
-- `suspects.json`
-  - `suspects[].image_path`
-- archive markdown front matter
-  - `image_path`
+### `suspects.json`
 
-Use paths relative to the case `assets/` directory, such as:
+Contains:
+
+- public profile
+- private truth
+- dialogue rules
+- memory rules
+- optional portrait key and image path
+
+### Markdown evidence files
+
+Each archive document uses front matter plus a body.
+
+Typical front matter fields:
+
+- `id`
+- `title`
+- `doc_type`
+- `folder`
+- `source_label`
+- `unlock_rule`
+- `entity_tags`
+- `summary`
+- `image_path`
+
+## Authoring workflow
+
+The authoring UI can:
+
+- scaffold a new case
+- edit case metadata
+- edit suspects
+- edit Markdown-backed documents
+- edit prompt templates
+- upload visual assets
+- save everything back to disk
+
+Authoring asset folders:
+
+- `cases/<case-id>/assets/suspects/`
+- `cases/<case-id>/assets/evidence/`
+- `cases/<case-id>/assets/locations/`
+
+Asset references are stored as paths relative to `assets/`, for example:
 
 ```text
-suspects/mara-voss.png
-evidence/ledger-photo.jpg
-locations/ashdown-hotel.webp
+suspects/mara-voss.svg
+evidence/incident-board.svg
+locations/ashdown-exterior.svg
 ```
 
-## Ollama Models
+If an image is missing, the frontend shows an intentional placeholder plate instead of a broken image.
 
-The backend is written to use Ollama for:
+## Retrieval and progression model
 
-- suspect dialogue generation
-- optional semantic embeddings during search and rescans
+The current progression loop is:
 
-Suggested local pulls:
+1. player starts with `start_state` unlocks
+2. archive search derives new contexts
+3. suspect conversations add additional contexts
+4. rescans apply `context_entity_discovered` rules
+5. theory-board links apply `board_link_confirmed` rules
+6. newly unlocked documents or suspects appear in the active case state
 
-```powershell
-ollama pull llama3.1:8b
-ollama pull nomic-embed-text
-```
+Implementation references:
 
-If Ollama is unavailable, the backend falls back to deterministic heuristic dialogue and keyword retrieval so the prototype still runs.
+- `backend/app/services/game.py`
+- `backend/app/services/retrieval.py`
 
-## PostgreSQL Setup
+## Frontend behavior
 
-The app now supports PostgreSQL as the primary shared persistence layer.
+The active interface currently supports:
 
-1. Install and start PostgreSQL locally.
-2. Create a database:
+- intake overview
+- archive browsing and search
+- interrogation with suspect dialogue
+- evidence pinning
+- theory board linking
+- theory submission
+- community stats
+- authoring studio
 
-```sql
-CREATE DATABASE investigation_room;
-```
+The frontend also:
 
-3. Set the connection URL before starting the backend:
-
-```powershell
-$env:INVESTIGATION_DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/investigation_room"
-```
-
-4. Restart the API. The backend creates its tables automatically on startup.
-
-If you prefer Docker:
-
-```powershell
-docker compose -f docker-compose.postgres.yml up -d
-```
-
-You can also copy [.env.example](/C:/Users/Aryan/Documents/RAG_Project/.env.example) into your shell environment and set `INVESTIGATION_DATABASE_URL` before launching the backend.
+- registers a signed session automatically
+- normalizes backend asset URLs to the API origin
+- opens visual attachments in a modal viewer
 
 ## Tests
 
+Backend tests live in `backend/tests`.
+
+Current coverage includes:
+
+- token auth
+- case loading
+- authoring persistence
+- database factory behavior
+- progression flow
+- PostgreSQL dialect behavior
+- streaming endpoint behavior
+
+Run tests with:
+
 ```powershell
+cd C:\Users\Aryan\Documents\RAG_Project
 & "C:\Users\Aryan\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" -m unittest discover -s backend/tests
 ```
+
+## Build verification
+
+Frontend production build:
+
+```powershell
+cd C:\Users\Aryan\Documents\RAG_Project\frontend
+npm run build
+```
+
+## Notes and limitations
+
+- the backend assumes case content is authored locally on disk
+- retrieval is paragraph-based and intentionally lightweight
+- the current frontend is primarily implemented in a single shell component plus an authoring surface
+- Ollama usage is optional but strongly improves dialogue and retrieval quality
+- some extra frontend scaffolding files exist under `frontend/src/context` and `frontend/src/views`, but the main running UI is currently driven by `frontend/src/App.tsx`
