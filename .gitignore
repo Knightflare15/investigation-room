@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+dist/
+build/
+node_modules/
+.DS_Store
+.idea/
+.vscode/
+frontend/dist/
+

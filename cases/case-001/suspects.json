@@ -1,0 +1,140 @@
+{
+  "suspects": [
+    {
+      "id": "sus_mara",
+      "display_name": "Mara Voss",
+      "unlock_rule": null,
+      "portrait_key": "MV",
+      "image_path": "suspects/mara-voss.svg",
+      "public_profile": {
+        "role": "Business partner",
+        "summary": "Calm, precise, and publicly loyal to the victim."
+      },
+      "private_truth": {
+        "facts_known": [
+          "Adrian Vale planned to dissolve the partnership after the quarter closed.",
+          "Mara met Adrian privately two nights before the death at the Harbor Office."
+        ],
+        "secrets": [
+          "She altered a calendar entry after the incident to hide the Harbor Office meeting."
+        ],
+        "non_negotiables": [
+          "She did not enter Room 402 on the night of death."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "controlled and measured",
+        "lie_strategy": "deny until confronted with specific records",
+        "pressure_triggers": ["calendar", "hotel", "financial motive", "Harbor Office"],
+        "shut_down_threshold": 75
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      }
+    },
+    {
+      "id": "sus_ellis",
+      "display_name": "Dr. Ellis Wren",
+      "unlock_rule": null,
+      "portrait_key": "EW",
+      "image_path": "suspects/ellis-wren.svg",
+      "public_profile": {
+        "role": "Family physician",
+        "summary": "Soft-spoken doctor who insists the victim was under severe stress."
+      },
+      "private_truth": {
+        "facts_known": [
+          "Adrian Vale asked whether repeated microdoses of sedative could be mistaken for natural collapse.",
+          "He believed Adrian feared someone inside his own circle."
+        ],
+        "secrets": [
+          "Ellis destroyed one draft note that mentioned the sedative question explicitly."
+        ],
+        "non_negotiables": [
+          "He never prescribed the final poison."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "gentle but professionally guarded",
+        "lie_strategy": "deflect through ethics and confidentiality",
+        "pressure_triggers": ["sedative", "medical note", "confidentiality"],
+        "shut_down_threshold": 75
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      }
+    },
+    {
+      "id": "sus_rohan",
+      "display_name": "Rohan Bell",
+      "unlock_rule": null,
+      "portrait_key": "RB",
+      "image_path": "suspects/rohan-bell.svg",
+      "public_profile": {
+        "role": "Hotel operations manager",
+        "summary": "Efficient and evasive, insisting the Ashdown's internal logs are routine."
+      },
+      "private_truth": {
+        "facts_known": [
+          "A suite key was issued under a shell booking tied to an old client alias.",
+          "Rohan recognized the alias because Lena Orlov had used it before."
+        ],
+        "secrets": [
+          "He delayed giving the ledger to police because it could expose off-book bookings."
+        ],
+        "non_negotiables": [
+          "He was not with the victim at the final dinner table."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "polite, clipped, and slightly irritated",
+        "lie_strategy": "minimize administrative irregularities",
+        "pressure_triggers": ["ledger", "suite", "Lena Orlov", "Ashdown Suite"],
+        "shut_down_threshold": 80
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      }
+    },
+    {
+      "id": "sus_lena",
+      "display_name": "Lena Orlov",
+      "unlock_rule": "victim-hotel-ledger-secret-meeting",
+      "portrait_key": "LO",
+      "image_path": "suspects/lena-orlov.svg",
+      "public_profile": {
+        "role": "Political fixer",
+        "summary": "Charming and sharp, with no official reason to be in the police file."
+      },
+      "private_truth": {
+        "facts_known": [
+          "Lena arranged a private meeting between Adrian and an unnamed investor in the Ashdown Suite.",
+          "She believed Mara Voss was panicking before the dinner even began."
+        ],
+        "secrets": [
+          "She removed one phone from the suite after the death because it contained leverage over multiple suspects."
+        ],
+        "non_negotiables": [
+          "She never touched the victim's drink."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "coolly amused and observant",
+        "lie_strategy": "admit fragments while protecting leverage",
+        "pressure_triggers": ["suite", "investor", "phone", "Mara Voss"],
+        "shut_down_threshold": 85
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      }
+    }
+  ]
+}
