@@ -84,6 +84,17 @@
       }
     },
     {
+      "id": "unlock_new_suspect_lena_from_conversation",
+      "trigger": {
+        "type": "conversation_context_discovered",
+        "value": "Lena Orlov"
+      },
+      "effects": {
+        "unlock_suspect_ids": ["sus_lena"],
+        "surface_document_ids": ["doc_witness_anna"]
+      }
+    },
+    {
       "id": "unlock_supplement",
       "trigger": {
         "type": "context_entity_discovered",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -67,6 +67,8 @@ class CaseConfig(BaseModel):
     difficulty: str
     estimated_minutes: int
     version: int
+    status: str = "approved"
+    owner_alias: str | None = None
     police_summary: str = ""
     cover_image_path: str | None = None
     cover_image_url: str | None = None
@@ -81,6 +83,16 @@ class CaseConfig(BaseModel):
 class PublicProfile(BaseModel):
     role: str
     summary: str
+
+
+class PersonalityProfile(BaseModel):
+    traits: list[str] = Field(default_factory=list)
+    speaking_style: str = ""
+    catchphrase: str = ""
+    verbal_tells: list[str] = Field(default_factory=list)
+    outward_goal: str = ""
+    protective_target: str = ""
+    protective_reason: str = ""
 
 
 class PrivateTruth(BaseModel):
@@ -107,6 +119,7 @@ class SuspectConfig(BaseModel):
     display_name: str
     unlock_rule: str | None = None
     public_profile: PublicProfile
+    personality_profile: PersonalityProfile = Field(default_factory=PersonalityProfile)
     private_truth: PrivateTruth
     dialogue_rules: DialogueRules
     memory_rules: MemoryRules
@@ -214,6 +227,10 @@ class DialogueResponse(BaseModel):
     reply: str
     new_context: list[str] = Field(default_factory=list)
     revealed_fact_ids: list[str] = Field(default_factory=list)
+    grounding_results: list[SearchResult] = Field(default_factory=list)
+    unlocked_documents: list[str] = Field(default_factory=list)
+    unlocked_suspects: list[str] = Field(default_factory=list)
+    lead_messages: list[str] = Field(default_factory=list)
     suspicion_level: int
     conversation: ConversationState
 
@@ -273,6 +290,8 @@ class CaseSummary(BaseModel):
     difficulty: str
     estimated_minutes: int
     version: int
+    status: str = "approved"
+    owner_alias: str | None = None
     cover_image_path: str | None = None
     cover_image_url: str | None = None
 
@@ -310,13 +329,128 @@ class CreateCaseRequest(BaseModel):
     estimated_minutes: int = 45
 
 
-class SessionRequest(BaseModel):
+class CaseBriefInput(BaseModel):
+    case_id: str
+    brief: str
+    difficulty: str = "medium"
+    estimated_minutes: int = 45
+
+
+class CaseIngestionInput(BaseModel):
+    case_id: str
+    source_text: str
+    difficulty: str = "medium"
+    estimated_minutes: int = 45
+    title_hint: str | None = None
+
+
+class ParsedCaseBrief(BaseModel):
+    case_id: str
+    sections: dict[str, str]
+
+
+class ExtractedSuspectDraft(BaseModel):
+    name: str
+    role: str
+    public_summary: str
+    hidden_facts: list[str] = Field(default_factory=list)
+    secrets: list[str] = Field(default_factory=list)
+    traits: list[str] = Field(default_factory=list)
+    speaking_style: str = ""
+    catchphrase: str = ""
+    verbal_tells: list[str] = Field(default_factory=list)
+    outward_goal: str = ""
+    protective_target: str = ""
+    protective_reason: str = ""
+
+
+class EvidenceDraft(BaseModel):
+    title: str
+    summary: str
+    details: list[str] = Field(default_factory=list)
+    doc_type: str = "memo"
+    folder: str = "crime_scene"
+    tags: list[str] = Field(default_factory=list)
+    hidden: bool = False
+
+
+class ExtractedCaseDraft(BaseModel):
+    case_id: str
+    title: str
+    premise: str
+    setting: str
+    victim: str
+    relationships: list[str] = Field(default_factory=list)
+    timeline: list[str] = Field(default_factory=list)
+    hidden_truth: list[str] = Field(default_factory=list)
+    solution_summary: str = ""
+    culprit_name: str = ""
+    motive: str = ""
+    contradictions: list[str] = Field(default_factory=list)
+    suspects: list[ExtractedSuspectDraft] = Field(default_factory=list)
+    evidence: list[EvidenceDraft] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class GenerateCaseDraftResponse(BaseModel):
+    bundle: AuthoringBundle
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SourceChunk(BaseModel):
+    id: str
+    text: str
+    detected_entities: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    section_hint: str = "source"
+
+
+class SourceGrounding(BaseModel):
+    generated_field: str
+    supporting_chunk_ids: list[str] = Field(default_factory=list)
+    preview: str
+
+
+class CaseIngestionResponse(BaseModel):
+    bundle: AuthoringBundle
+    warnings: list[str] = Field(default_factory=list)
+    groundings: list[SourceGrounding] = Field(default_factory=list)
+
+
+SessionRole = Literal["player", "admin"]
+
+
+class SessionPrincipal(BaseModel):
     alias: str
+    role: SessionRole
+
+
+class AuthRegisterRequest(BaseModel):
+    alias: str
+    password: str
+    admin_code: str | None = None
+
+
+class AuthLoginRequest(BaseModel):
+    alias: str
+    password: str
+    admin_code: str | None = None
 
 
 class SessionResponse(BaseModel):
     token: str
     alias: str
+    role: SessionRole
+
+
+class SessionStatusResponse(BaseModel):
+    alias: str
+    role: SessionRole
+
+
+class AuthUserRecord(BaseModel):
+    alias: str
+    password_hash: str
 
 
 class UploadAssetResponse(BaseModel):
@@ -345,6 +479,8 @@ class LoadedCase:
             difficulty=self.config.difficulty,
             estimated_minutes=self.config.estimated_minutes,
             version=self.config.version,
+            status=self.config.status,
+            owner_alias=self.config.owner_alias,
             cover_image_path=self.config.cover_image_path,
             cover_image_url=self.config.cover_image_url,
         )

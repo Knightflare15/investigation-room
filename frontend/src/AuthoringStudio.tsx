@@ -4,11 +4,14 @@ import type {
   ArchiveDomain,
   AssetEntry,
   AuthoringBundle,
+  CaseBriefInput,
   AuthoringCaseConfig,
+  CaseIngestionInput,
   AuthoringSuspect,
   CaseDocument,
   CreateCaseRequest,
   LocationDossier,
+  SourceGrounding,
 } from './types';
 import { MediaPlate, PanelHeader } from './ui';
 
@@ -27,6 +30,106 @@ const emptyCreateForm: CreateCaseRequest = {
   estimated_minutes: 45,
 };
 
+const briefTemplate = `Case Title
+The Glass Harbor Affair
+
+Premise
+A civic fundraiser ends in disaster when a key organizer is found dead after the guests are dismissed.
+
+Victim
+Nadia Vance, the fundraiser chair and public face of the harbor redevelopment campaign.
+
+Setting
+A restored waterfront customs house used for private events, with an upstairs records room, a service corridor, and a sealed balcony door facing the marina.
+
+Suspects
+Name: Elias Mercer
+Role: Finance director
+Public Summary: Calm and meticulous, responsible for the event accounts.
+Hidden Facts: He discovered a payment discrepancy hours before the death.
+Secrets: He moved one ledger page before the police arrived.
+Traits: controlled, image-conscious
+Speaking Style: Precise and restrained.
+Catchphrase: Stick to the record.
+Verbal Tells: Repeats exact times when nervous.
+Outward Goal: Protect the campaign from scandal.
+Protective Target: the event accounts
+Protective Reason: A financial scandal would destroy his position.
+
+Name: Priya Sen
+Role: Campaign strategist
+Public Summary: Charismatic and persuasive, often smoothing over conflicts.
+Hidden Facts: She arranged a private meeting between Nadia and an unnamed donor.
+Secrets: She deleted one voice note after the meeting.
+Traits: charming, strategic
+Speaking Style: Smooth and confident.
+Catchphrase: Context matters.
+Verbal Tells: Answers accusations with observations.
+Outward Goal: Keep control of the campaign narrative.
+Protective Target: the donor meeting
+Protective Reason: If exposed, it ties her directly to the final argument.
+
+Relationships
+- Elias and Priya were aligned publicly but privately disagreed about hidden campaign debts.
+- Nadia had been preparing to expose an internal betrayal after the fundraiser.
+
+Timeline
+- Nadia receives an urgent note during the closing toast.
+- Priya is seen near the staircase shortly afterward.
+- Elias enters the records room corridor before security loses sight of him.
+- The victim is found after the guests are cleared.
+
+Evidence
+Title: Event Ledger Extract
+Summary: Partial ledger showing a handwritten correction near a donor payment.
+Type: financial_record
+Tags: ledger, donor payment, accounts
+Hidden: no
+
+Title: Deleted Voice Note Transcript
+Summary: Recovered transcript of a short message referencing the balcony door.
+Type: communications_log
+Tags: voice note, balcony door, donor
+Hidden: yes
+
+Hidden Truth
+- Nadia discovered that someone had redirected redevelopment funds.
+- The private donor meeting turned into a confrontation over exposure and control.
+
+Solution
+Culprit: Priya Sen
+Motive: Priya believed Nadia would destroy the campaign and her own career if the donor arrangement became public.
+Summary: Priya used the private meeting to corner Nadia, then relied on the commotion of the event shutdown to hide what happened.`;
+
+const emptyBriefForm: CaseBriefInput = {
+  case_id: '',
+  brief: briefTemplate,
+  difficulty: 'medium',
+  estimated_minutes: 45,
+};
+
+const sourceTemplate = `The Glass Harbor Affair
+
+Nadia Vance, chair of the harbor redevelopment fundraiser, is found dead inside the restored customs house after the final guests are dismissed. The building has an upstairs records room, a service corridor, and a balcony door facing the marina.
+
+Elias Mercer, the finance director, is calm and meticulous. He was responsible for the event accounts and discovered a payment discrepancy before Nadia died. Elias moved one ledger page before police arrived because he feared the campaign would collapse if the donor irregularity became public.
+
+Priya Sen, the campaign strategist, is charismatic and persuasive. She arranged a private meeting between Nadia and an unnamed donor, then deleted one voice note after the meeting. Priya wants to keep control of the campaign narrative and avoids direct answers about the balcony door.
+
+Nadia received an urgent note during the closing toast. Priya was seen near the staircase shortly afterward. Elias entered the records room corridor before security lost sight of him. The victim was found after the guests were cleared.
+
+Evidence includes an event ledger extract with a handwritten correction near a donor payment, a recovered deleted voice note mentioning the balcony door, and security notes showing a gap near the service corridor.
+
+Hidden truth: Nadia discovered that redevelopment funds had been redirected. Priya confronted Nadia during the private meeting because she feared Nadia would expose the donor arrangement and destroy her career.`;
+
+const emptySourceForm: CaseIngestionInput = {
+  case_id: '',
+  source_text: sourceTemplate,
+  difficulty: 'medium',
+  estimated_minutes: 45,
+  title_hint: '',
+};
+
 function cloneBundle(bundle: AuthoringBundle): AuthoringBundle {
   return JSON.parse(JSON.stringify(bundle)) as AuthoringBundle;
 }
@@ -40,8 +143,13 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
   const [selectedCaseId, setSelectedCaseId] = useState(currentCaseId);
   const [draft, setDraft] = useState<AuthoringBundle | null>(null);
   const [createForm, setCreateForm] = useState<CreateCaseRequest>(emptyCreateForm);
+  const [briefForm, setBriefForm] = useState<CaseBriefInput>(emptyBriefForm);
+  const [sourceForm, setSourceForm] = useState<CaseIngestionInput>(emptySourceForm);
+  const [importMode, setImportMode] = useState<'brief' | 'source'>('brief');
   const [uploadFolder, setUploadFolder] = useState('suspects');
   const [status, setStatus] = useState('');
+  const [generationWarnings, setGenerationWarnings] = useState<string[]>([]);
+  const [sourceGroundings, setSourceGroundings] = useState<SourceGrounding[]>([]);
   const [advancedRescanRules, setAdvancedRescanRules] = useState('[]');
   const [advancedBoardLinks, setAdvancedBoardLinks] = useState('[]');
 
@@ -75,6 +183,8 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
   async function loadBundle(caseId: string) {
     const bundle = await api.getAuthoringCase(caseId, alias);
     setDraft(bundle);
+    setGenerationWarnings([]);
+    setSourceGroundings([]);
     setAdvancedRescanRules(JSON.stringify(bundle.case.rescan_rules, null, 2));
     setAdvancedBoardLinks(JSON.stringify(bundle.case.valid_board_links, null, 2));
   }
@@ -137,6 +247,40 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
     }
   }
 
+  async function handleGenerateCase(event: FormEvent) {
+    event.preventDefault();
+    try {
+      const generated = await api.generateAuthoringCase(alias, briefForm);
+      setDraft(generated.bundle);
+      setGenerationWarnings(generated.warnings);
+      setSourceGroundings([]);
+      setStatus(`Generated draft case ${generated.bundle.case.title}.`);
+      await loadAuthoringCases();
+      setSelectedCaseId(generated.bundle.case.id);
+      onSelectCase(generated.bundle.case.id);
+      await onPlayableCasesChanged(generated.bundle.case.id);
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  }
+
+  async function handleIngestCase(event: FormEvent) {
+    event.preventDefault();
+    try {
+      const generated = await api.ingestAuthoringCase(alias, sourceForm);
+      setDraft(generated.bundle);
+      setGenerationWarnings(generated.warnings);
+      setSourceGroundings(generated.groundings);
+      setStatus(`Ingested draft case ${generated.bundle.case.title}.`);
+      await loadAuthoringCases();
+      setSelectedCaseId(generated.bundle.case.id);
+      onSelectCase(generated.bundle.case.id);
+      await onPlayableCasesChanged(generated.bundle.case.id);
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  }
+
   async function handleSave() {
     if (!draft) return;
     try {
@@ -145,10 +289,24 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
       next.case.valid_board_links = JSON.parse(advancedBoardLinks);
       const saved = await api.saveAuthoringCase(next.case.id, alias, next);
       setDraft(saved);
+      setGenerationWarnings([]);
       setStatus(`Saved ${saved.case.title}.`);
       await loadAuthoringCases();
       onSelectCase(saved.case.id);
       await onPlayableCasesChanged(saved.case.id);
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  }
+
+  async function handleApproveCase() {
+    if (!draft) return;
+    try {
+      const approved = await api.approveAuthoringCase(draft.case.id, alias);
+      setDraft(approved);
+      setStatus(`Approved ${approved.case.title}.`);
+      await loadAuthoringCases();
+      await onPlayableCasesChanged(approved.case.id);
     } catch (error) {
       setStatus((error as Error).message);
     }
@@ -199,6 +357,63 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
           </button>
         </form>
 
+        <form className="intel-card" onSubmit={importMode === 'brief' ? handleGenerateCase : handleIngestCase}>
+          <div className="intel-card-header">
+            <span>{importMode === 'brief' ? 'Import From Case Brief' : 'Import From Raw Source'}</span>
+            <strong>{importMode === 'brief' ? 'Draft Generator' : 'RAG Ingestion'}</strong>
+          </div>
+          <div className="prompt-chip-row">
+            <button className={`prompt-chip ${importMode === 'brief' ? 'active' : ''}`} type="button" onClick={() => setImportMode('brief')}>
+              Structured Brief
+            </button>
+            <button className={`prompt-chip ${importMode === 'source' ? 'active' : ''}`} type="button" onClick={() => setImportMode('source')}>
+              Raw Source Packet
+            </button>
+          </div>
+          {importMode === 'brief' ? (
+            <>
+              <label>
+                Draft Case ID
+                <input value={briefForm.case_id} onChange={(event) => setBriefForm({ ...briefForm, case_id: event.target.value })} />
+              </label>
+              <label>
+                Case Brief
+                <textarea value={briefForm.brief} onChange={(event) => setBriefForm({ ...briefForm, brief: event.target.value })} rows={18} />
+              </label>
+              <div className="asset-folder-note">
+                <strong>Required headings</strong>
+                <span>`Case Title`, `Premise`, `Victim`, `Setting`, `Suspects`, `Relationships`, `Timeline`, `Evidence`, `Hidden Truth`, `Solution`</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <label>
+                Draft Case ID
+                <input value={sourceForm.case_id} onChange={(event) => setSourceForm({ ...sourceForm, case_id: event.target.value })} />
+              </label>
+              <label>
+                Optional Title Hint
+                <input value={sourceForm.title_hint ?? ''} onChange={(event) => setSourceForm({ ...sourceForm, title_hint: event.target.value })} />
+              </label>
+              <label>
+                Raw Source Packet
+                <textarea
+                  value={sourceForm.source_text}
+                  onChange={(event) => setSourceForm({ ...sourceForm, source_text: event.target.value })}
+                  rows={18}
+                />
+              </label>
+              <div className="asset-folder-note">
+                <strong>Paste-only v1</strong>
+                <span>Use creator-authored story notes, bios, evidence notes, timelines, and solution details. The backend chunks, retrieves, extracts, and returns citations for review.</span>
+              </div>
+            </>
+          )}
+          <button className="dossier-button dossier-button-accent" type="submit">
+            {importMode === 'brief' ? 'Generate Draft Case' : 'Ingest Source Into Draft'}
+          </button>
+        </form>
+
         <section className="intel-card">
           <div className="intel-card-header">
             <span>Current Cases</span>
@@ -234,6 +449,7 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
                 <div className="authoring-cover-copy">
                   <h3>{draft.case.title}</h3>
                   <p>{draft.case.hook}</p>
+                  <p className="eyebrow">Status: {draft.case.status}</p>
                   <label>
                     Cover Image
                     <select
@@ -287,6 +503,14 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
               <strong>Overview</strong>
             </div>
             <div className="authoring-grid">
+              <label className="editor-card">
+                <span>Status</span>
+                <input value={draft.case.status} readOnly />
+              </label>
+              <label className="editor-card">
+                <span>Owner Alias</span>
+                <input value={draft.case.owner_alias ?? ''} readOnly />
+              </label>
               <label className="editor-card">
                 <span>Title</span>
                 <input value={draft.case.title} onChange={(event) => updateCase((value) => { value.title = event.target.value; })} />
@@ -419,6 +643,49 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
                   <input value={suspect.public_profile.role} onChange={(event) => updateSuspects((suspects) => { suspects[index].public_profile.role = event.target.value; })} placeholder="role" />
                   <textarea value={suspect.public_profile.summary} onChange={(event) => updateSuspects((suspects) => { suspects[index].public_profile.summary = event.target.value; })} placeholder="public summary" />
                   <textarea
+                    value={suspect.personality_profile.traits.join('\n')}
+                    onChange={(event) =>
+                      updateSuspects((suspects) => {
+                        suspects[index].personality_profile.traits = event.target.value.split('\n').map((value) => value.trim()).filter(Boolean);
+                      })
+                    }
+                    placeholder="personality traits"
+                  />
+                  <input
+                    value={suspect.personality_profile.speaking_style}
+                    onChange={(event) => updateSuspects((suspects) => { suspects[index].personality_profile.speaking_style = event.target.value; })}
+                    placeholder="speaking style"
+                  />
+                  <input
+                    value={suspect.personality_profile.catchphrase}
+                    onChange={(event) => updateSuspects((suspects) => { suspects[index].personality_profile.catchphrase = event.target.value; })}
+                    placeholder="catchphrase"
+                  />
+                  <textarea
+                    value={suspect.personality_profile.verbal_tells.join('\n')}
+                    onChange={(event) =>
+                      updateSuspects((suspects) => {
+                        suspects[index].personality_profile.verbal_tells = event.target.value.split('\n').map((value) => value.trim()).filter(Boolean);
+                      })
+                    }
+                    placeholder="verbal tells"
+                  />
+                  <input
+                    value={suspect.personality_profile.outward_goal}
+                    onChange={(event) => updateSuspects((suspects) => { suspects[index].personality_profile.outward_goal = event.target.value; })}
+                    placeholder="outward goal"
+                  />
+                  <input
+                    value={suspect.personality_profile.protective_target}
+                    onChange={(event) => updateSuspects((suspects) => { suspects[index].personality_profile.protective_target = event.target.value; })}
+                    placeholder="protective target"
+                  />
+                  <textarea
+                    value={suspect.personality_profile.protective_reason}
+                    onChange={(event) => updateSuspects((suspects) => { suspects[index].personality_profile.protective_reason = event.target.value; })}
+                    placeholder="protective reason"
+                  />
+                  <textarea
                     value={suspect.private_truth.facts_known.join('\n')}
                     onChange={(event) =>
                       updateSuspects((suspects) => {
@@ -463,6 +730,15 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
                     image_path: null,
                     image_url: null,
                     public_profile: { role: 'Role', summary: 'Public summary' },
+                    personality_profile: {
+                      traits: [],
+                      speaking_style: 'Guarded and deliberate.',
+                      catchphrase: '',
+                      verbal_tells: [],
+                      outward_goal: '',
+                      protective_target: '',
+                      protective_reason: '',
+                    },
                     private_truth: { facts_known: [], secrets: [], non_negotiables: [] },
                     dialogue_rules: {
                       baseline_tone: 'guarded',
@@ -595,7 +871,42 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
             <button className="dossier-button dossier-button-accent" type="button" onClick={handleSave}>
               Save Authoring Bundle
             </button>
+            {draft.case.status !== 'approved' ? (
+              <button className="dossier-button dossier-button-ghost" type="button" onClick={handleApproveCase}>
+                Approve Case
+              </button>
+            ) : null}
           </div>
+          {generationWarnings.length ? (
+            <section className="intel-card">
+              <div className="intel-card-header">
+                <span>Generation Warnings</span>
+                <strong>{generationWarnings.length.toString().padStart(2, '0')}</strong>
+              </div>
+              <ul className="plain-list">
+                {generationWarnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {sourceGroundings.length ? (
+            <section className="intel-card">
+              <div className="intel-card-header">
+                <span>Source Grounding</span>
+                <strong>{sourceGroundings.length.toString().padStart(2, '0')}</strong>
+              </div>
+              <div className="intel-list">
+                {sourceGroundings.map((grounding) => (
+                  <div key={grounding.generated_field} className="intel-row">
+                    <strong>{grounding.generated_field.replace(/_/g, ' ')}</strong>
+                    <span>{grounding.supporting_chunk_ids.join(', ')}</span>
+                    <span>{grounding.preview}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </>
       ) : (
         <div className="intel-card">

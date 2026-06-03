@@ -8,7 +8,11 @@ from backend.app.auth import issue_token, read_token
 class AuthTokenTests(unittest.TestCase):
     def test_issue_then_read_roundtrip(self) -> None:
         token = issue_token("Nero Wolfe")
-        self.assertEqual(read_token(token), "Nero Wolfe")
+        player = read_token(token)
+        self.assertIsNotNone(player)
+        assert player is not None
+        self.assertEqual(player.alias, "Nero Wolfe")
+        self.assertEqual(player.role, "player")
 
     def test_tampered_payload_rejected(self) -> None:
         token = issue_token("Nero")

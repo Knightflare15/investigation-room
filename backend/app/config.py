@@ -14,8 +14,16 @@ class Settings:
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     ollama_chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1:8b")
     ollama_embed_model: str = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+    ollama_chat_timeout_seconds: int = int(os.getenv("OLLAMA_CHAT_TIMEOUT_SECONDS", "45"))
+    ollama_stream_timeout_seconds: int = int(os.getenv("OLLAMA_STREAM_TIMEOUT_SECONDS", "60"))
     default_alias: str = "Consultant"
     secret_key: str = os.getenv("INVESTIGATION_SECRET_KEY", "dev-insecure-key")
+    admin_access_code: str = os.getenv("INVESTIGATION_ADMIN_ACCESS_CODE", "change-me")
+    admin_aliases: tuple[str, ...] = tuple(
+        o.strip()
+        for o in os.getenv("INVESTIGATION_ADMIN_ALIASES", "Consultant,Admin").split(",")
+        if o.strip()
+    )
     cors_origins: tuple[str, ...] = tuple(
         o.strip()
         for o in os.getenv("INVESTIGATION_CORS_ORIGINS", "http://localhost:5173").split(",")

@@ -11,6 +11,7 @@ import type {
   PlayerCaseState,
   RescanResponse,
   SearchResult,
+  SessionRole,
   Suspect,
 } from '../types';
 
@@ -19,9 +20,13 @@ export type ViewMode = 'intake' | 'archive' | 'interrogation' | 'board' | 'submi
 type MediaPreview = { src: string; title: string; eyebrow: string; summary: string };
 
 export type GameState = {
+  isAuthenticated: boolean;
   alias: string;
   aliasDraft: string;
+  sessionRole: SessionRole;
   cases: CaseSummary[];
+  pendingCases: CaseSummary[];
+  caseSearchQuery: string;
   selectedCaseId: string;
   caseDetail: CaseDetailResponse | null;
   saveState: PlayerCaseState | null;
@@ -31,6 +36,8 @@ export type GameState = {
   selectedDocumentId: string;
   searchQuery: string;
   searchResults: SearchResult[];
+  lastGroundingResults: SearchResult[];
+  leadMessages: string[];
   rescanResults: RescanResponse | null;
   communityStats: CommunityStatsResponse | null;
   mediaPreview: MediaPreview | null;
@@ -49,12 +56,16 @@ export type GameState = {
 
 export type GameAction =
   | { type: 'SET_ALIAS_DRAFT'; payload: string }
-  | { type: 'COMMIT_ALIAS' }
+  | { type: 'SET_AUTH_SESSION'; payload: { alias: string; role: SessionRole } }
+  | { type: 'LOG_OUT' }
+  | { type: 'SET_SESSION_ROLE'; payload: SessionRole }
   | { type: 'SET_VIEW'; payload: ViewMode }
   | { type: 'SET_SELECTED_CASE'; payload: string }
   | { type: 'SET_SELECTED_SUSPECT'; payload: string }
   | { type: 'SET_SELECTED_DOCUMENT'; payload: string }
   | { type: 'SET_CASES'; payload: CaseSummary[] }
+  | { type: 'SET_PENDING_CASES'; payload: CaseSummary[] }
+  | { type: 'SET_CASE_SEARCH_QUERY'; payload: string }
   | { type: 'SET_CASE_DETAIL'; payload: CaseDetailResponse }
   | { type: 'SET_SAVE_STATE'; payload: PlayerCaseState }
   | { type: 'SET_CONVERSATIONS'; payload: Record<string, ConversationState> }
@@ -62,6 +73,8 @@ export type GameAction =
   | { type: 'SET_COMMUNITY_STATS'; payload: CommunityStatsResponse }
   | { type: 'SET_SEARCH_QUERY'; payload: string }
   | { type: 'SET_SEARCH_RESULTS'; payload: SearchResult[] }
+  | { type: 'SET_LAST_GROUNDING_RESULTS'; payload: SearchResult[] }
+  | { type: 'SET_LEAD_MESSAGES'; payload: string[] }
   | { type: 'SET_RESCAN_RESULTS'; payload: RescanResponse }
   | { type: 'SET_MEDIA_PREVIEW'; payload: MediaPreview | null }
   | { type: 'SET_LOADING'; payload: boolean }
@@ -70,12 +83,16 @@ export type GameAction =
   | { type: 'APPEND_TRANSCRIPT_TURN'; payload: { suspectId: string; turn: ConversationTurn } }
   | { type: 'UPDATE_STREAMING_REPLY'; payload: { suspectId: string; text: string } };
 
-const savedAlias = localStorage.getItem('investigation-room-alias') || 'Sherlock Holmes';
+const savedAlias = localStorage.getItem('investigation-room-alias') || '';
 
 const initialState: GameState = {
+  isAuthenticated: false,
   alias: savedAlias,
   aliasDraft: savedAlias,
+  sessionRole: 'player',
   cases: [],
+  pendingCases: [],
+  caseSearchQuery: '',
   selectedCaseId: '',
   caseDetail: null,
   saveState: null,
@@ -85,6 +102,8 @@ const initialState: GameState = {
   selectedDocumentId: '',
   searchQuery: '',
   searchResults: [],
+  lastGroundingResults: [],
+  leadMessages: [],
   rescanResults: null,
   communityStats: null,
   mediaPreview: null,
@@ -104,19 +123,39 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case 'SET_ALIAS_DRAFT':
       return { ...state, aliasDraft: action.payload };
-    case 'COMMIT_ALIAS':
-      localStorage.setItem('investigation-room-alias', state.aliasDraft);
-      return { ...state, alias: state.aliasDraft };
+    case 'SET_AUTH_SESSION':
+      localStorage.setItem('investigation-room-alias', action.payload.alias);
+      return {
+        ...state,
+        isAuthenticated: true,
+        alias: action.payload.alias,
+        aliasDraft: action.payload.alias,
+        sessionRole: action.payload.role,
+      };
+    case 'LOG_OUT':
+      localStorage.removeItem('investigation-room-alias');
+      return {
+        ...initialState,
+        alias: '',
+        aliasDraft: '',
+        error: '',
+      };
+    case 'SET_SESSION_ROLE':
+      return { ...state, sessionRole: action.payload };
     case 'SET_VIEW':
       return { ...state, selectedView: action.payload };
     case 'SET_SELECTED_CASE':
-      return { ...state, selectedCaseId: action.payload };
+      return { ...state, selectedCaseId: action.payload, leadMessages: [] };
     case 'SET_SELECTED_SUSPECT':
       return { ...state, selectedSuspectId: action.payload };
     case 'SET_SELECTED_DOCUMENT':
       return { ...state, selectedDocumentId: action.payload };
     case 'SET_CASES':
       return { ...state, cases: action.payload };
+    case 'SET_PENDING_CASES':
+      return { ...state, pendingCases: action.payload };
+    case 'SET_CASE_SEARCH_QUERY':
+      return { ...state, caseSearchQuery: action.payload };
     case 'SET_CASE_DETAIL': {
       const detail = action.payload;
       const unlockedSuspects = detail.suspects;
@@ -134,6 +173,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return {
         ...state,
         caseDetail: detail,
+        lastGroundingResults: [],
         unlockedSuspects,
         boardNodes,
         folderCounts,
@@ -210,6 +250,10 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...state, searchQuery: action.payload };
     case 'SET_SEARCH_RESULTS':
       return { ...state, searchResults: action.payload };
+    case 'SET_LAST_GROUNDING_RESULTS':
+      return { ...state, lastGroundingResults: action.payload };
+    case 'SET_LEAD_MESSAGES':
+      return { ...state, leadMessages: action.payload };
     case 'SET_RESCAN_RESULTS':
       return { ...state, rescanResults: action.payload };
     case 'SET_MEDIA_PREVIEW':

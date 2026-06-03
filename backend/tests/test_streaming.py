@@ -32,6 +32,9 @@ class StreamingTalkTests(unittest.TestCase):
         tokens = list(self.game.stream_talk_to_suspect("case-001", self.alias, self.suspect_id, "Why did you do it?"))
         streamed = "".join(tokens)
         self.assertTrue(streamed.strip(), "stream should yield a non-empty reply")
+        self.assertNotIn("answers in a", streamed.lower())
+        self.assertNotIn("cadence", streamed.lower())
+        self.assertNotIn("voice", streamed.lower())
 
         conversation = self.game.db.load_conversation("case-001", self.alias, self.suspect_id)
         self.assertIsNotNone(conversation)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
@@ -7,22 +8,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .auth import issue_token
 from .config import settings
-from .dependencies import get_authoring_service, get_game_service, get_player
+from .dependencies import get_auth_service, get_authoring_service, get_game_service, get_player
 from .models import (
+    AuthLoginRequest,
+    AuthRegisterRequest,
     AuthoringBundle,
     BoardLinkRequest,
+    CaseBriefInput,
+    CaseIngestionInput,
+    CaseIngestionResponse,
     ConfrontRequest,
     CreateCaseRequest,
+    GenerateCaseDraftResponse,
     RescanRequest,
     SearchRequest,
-    SessionRequest,
-    SessionResponse,
+    SessionPrincipal,
+    SessionStatusResponse,
     SubmitTheoryRequest,
     TalkRequest,
     TogglePinRequest,
 )
+from .services.accounts import AuthService
 from .services.authoring import AuthoringService
 from .services.game import GameService
 
@@ -42,15 +49,35 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/session", response_model=SessionResponse)
-def create_session(payload: SessionRequest):
-    """Issue a signed token binding the chosen alias to the server secret.
+@app.post("/auth/register")
+def register(
+    payload: AuthRegisterRequest,
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+):
+    try:
+        return auth.register(payload.alias, payload.password, payload.admin_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    The prototype has no passwords — registering an alias is enough to obtain an
-    unspoofable identity. Clients send the returned token as `Authorization: Bearer <token>`.
-    """
-    alias = payload.alias.strip() or settings.default_alias
-    return SessionResponse(token=issue_token(alias), alias=alias)
+
+@app.post("/auth/login")
+def login(
+    payload: AuthLoginRequest,
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+):
+    try:
+        return auth.login(payload.alias, payload.password, payload.admin_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@app.get("/session", response_model=SessionStatusResponse)
+def get_session(player: Annotated[SessionPrincipal, Depends(get_player)]):
+    return SessionStatusResponse(alias=player.alias, role=player.role)
 
 
 @app.get("/cases")
@@ -58,14 +85,25 @@ def list_cases(game: Annotated[GameService, Depends(get_game_service)]):
     return game.list_cases()
 
 
+@app.get("/cases/pending")
+def list_pending_cases(
+    game: Annotated[GameService, Depends(get_game_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
+):
+    try:
+        return game.list_pending_cases(player.alias)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 @app.get("/cases/{case_id}")
 def get_case(
     case_id: str,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.get_case_detail(case_id, alias)
+        return game.get_case_detail(case_id, player.alias)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -74,10 +112,10 @@ def get_case(
 def get_save_state(
     case_id: str,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.get_save_state(case_id, alias)
+        return game.get_save_state(case_id, player.alias)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -87,10 +125,10 @@ def search_case(
     case_id: str,
     payload: SearchRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.search_case(case_id, alias, payload)
+        return game.search_case(case_id, player.alias, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -100,10 +138,10 @@ def rescan_case(
     case_id: str,
     payload: RescanRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.rescan_case(case_id, alias, payload)
+        return game.rescan_case(case_id, player.alias, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -114,10 +152,23 @@ def talk_to_suspect(
     suspect_id: str,
     payload: TalkRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.talk_to_suspect(case_id, alias, suspect_id, payload.message)
+        return game.talk_to_suspect(case_id, player.alias, suspect_id, payload.message)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/cases/{case_id}/suspects/{suspect_id}/begin-session")
+def begin_interrogation_session(
+    case_id: str,
+    suspect_id: str,
+    game: Annotated[GameService, Depends(get_game_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
+):
+    try:
+        return game.begin_interrogation_session(case_id, player.alias, suspect_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -128,12 +179,22 @@ def talk_to_suspect_stream(
     suspect_id: str,
     payload: TalkRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     def event_generator():
         try:
-            for token in game.stream_talk_to_suspect(case_id, alias, suspect_id, payload.message):
+            grounding_results = game.get_talk_grounding(case_id, player.alias, suspect_id, payload.message)
+            yield f"data: [GROUNDING]{json.dumps([result.model_dump(mode='json') for result in grounding_results])}\n\n"
+            for token in game.stream_talk_to_suspect(
+                case_id,
+                player.alias,
+                suspect_id,
+                payload.message,
+                grounding_results=grounding_results,
+            ):
                 yield f"data: {token}\n\n"
+            lead_event = game.pop_stream_lead_event(case_id, player.alias, suspect_id)
+            yield f"data: [LEADS]{json.dumps(lead_event)}\n\n"
         except KeyError as exc:
             yield f"data: [ERROR] {exc}\n\n"
         yield "data: [DONE]\n\n"
@@ -147,10 +208,10 @@ def confront_suspect(
     suspect_id: str,
     payload: ConfrontRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.confront_suspect(case_id, alias, suspect_id, payload)
+        return game.confront_suspect(case_id, player.alias, suspect_id, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -160,10 +221,10 @@ def add_board_link(
     case_id: str,
     payload: BoardLinkRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.add_board_link(case_id, alias, payload)
+        return game.add_board_link(case_id, player.alias, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -173,10 +234,10 @@ def toggle_pin(
     case_id: str,
     payload: TogglePinRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.toggle_pin(case_id, alias, payload)
+        return game.toggle_pin(case_id, player.alias, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -186,10 +247,10 @@ def submit_theory(
     case_id: str,
     payload: SubmitTheoryRequest,
     game: Annotated[GameService, Depends(get_game_service)],
-    alias: Annotated[str, Depends(get_player)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.submit_theory(case_id, alias, payload)
+        return game.submit_theory(case_id, player.alias, payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -200,9 +261,10 @@ def submit_theory(
 def community_stats(
     case_id: str,
     game: Annotated[GameService, Depends(get_game_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return game.get_community_stats(case_id)
+        return game.get_community_stats(case_id, player.alias)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -210,8 +272,9 @@ def community_stats(
 @app.get("/authoring/cases")
 def list_authoring_cases(
     authoring: Annotated[AuthoringService, Depends(get_authoring_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
-    return authoring.list_bundles()
+    return authoring.list_bundles(player.alias)
 
 
 @app.post("/authoring/cases")
@@ -219,11 +282,42 @@ def create_authoring_case(
     payload: CreateCaseRequest,
     game: Annotated[GameService, Depends(get_game_service)],
     authoring: Annotated[AuthoringService, Depends(get_authoring_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        bundle = authoring.create_case(payload)
+        bundle = authoring.create_case(payload, player.alias)
         game.reload_cases()
         return bundle
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/authoring/cases/generate", response_model=GenerateCaseDraftResponse)
+def generate_authoring_case(
+    payload: CaseBriefInput,
+    game: Annotated[GameService, Depends(get_game_service)],
+    authoring: Annotated[AuthoringService, Depends(get_authoring_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
+):
+    try:
+        generated = authoring.generate_case_from_brief(payload, player.alias)
+        game.reload_cases()
+        return generated
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/authoring/cases/ingest", response_model=CaseIngestionResponse)
+def ingest_authoring_case(
+    payload: CaseIngestionInput,
+    game: Annotated[GameService, Depends(get_game_service)],
+    authoring: Annotated[AuthoringService, Depends(get_authoring_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
+):
+    try:
+        generated = authoring.ingest_case_from_source(payload, player.alias)
+        game.reload_cases()
+        return generated
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -232,10 +326,11 @@ def create_authoring_case(
 def get_authoring_case(
     case_id: str,
     authoring: Annotated[AuthoringService, Depends(get_authoring_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        return authoring.load_bundle(case_id)
-    except FileNotFoundError as exc:
+        return authoring.load_bundle(case_id, player.alias)
+    except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -245,9 +340,25 @@ def save_authoring_case(
     payload: AuthoringBundle,
     game: Annotated[GameService, Depends(get_game_service)],
     authoring: Annotated[AuthoringService, Depends(get_authoring_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        bundle = authoring.save_bundle(case_id, payload)
+        bundle = authoring.save_bundle(case_id, payload, player.alias)
+        game.reload_cases()
+        return bundle
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/authoring/cases/{case_id}/approve")
+def approve_authoring_case(
+    case_id: str,
+    game: Annotated[GameService, Depends(get_game_service)],
+    authoring: Annotated[AuthoringService, Depends(get_authoring_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
+):
+    try:
+        bundle = authoring.approve_case(case_id, player.alias)
         game.reload_cases()
         return bundle
     except ValueError as exc:
@@ -259,12 +370,13 @@ async def upload_authoring_asset(
     case_id: str,
     game: Annotated[GameService, Depends(get_game_service)],
     authoring: Annotated[AuthoringService, Depends(get_authoring_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
     folder: str = Form(...),
     file: UploadFile = File(...),
 ):
     try:
         content = await file.read()
-        asset = authoring.save_asset(case_id, folder, file.filename or "asset.bin", content)
+        asset = authoring.save_asset(case_id, folder, file.filename or "asset.bin", content, player.alias)
         game.reload_cases()
         return asset
     except ValueError as exc:

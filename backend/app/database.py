@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from .models import CommunityExcerpt, CommunityStatsResponse, ConversationState, PlayerCaseState
+from .models import AuthUserRecord, CommunityExcerpt, CommunityStatsResponse, ConversationState, PlayerCaseState
 
 
 POSTGRES_SCHEMA = """
@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS theory_submissions (
     excerpt TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS auth_users (
+    alias TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
 """
 
 SQLITE_SCHEMA = """
@@ -92,6 +98,12 @@ CREATE TABLE IF NOT EXISTS theory_submissions (
     timeline_text TEXT NOT NULL,
     evidence_ids TEXT NOT NULL,
     excerpt TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS auth_users (
+    alias TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -297,6 +309,27 @@ class BaseDatabase(ABC):
             culprit_counts=culprit_counts,
             evidence_counts=evidence_counts,
             excerpts=excerpts[-5:],
+        )
+
+    # ------------------------------------------------------------------ #
+    # Auth users                                                           #
+    # ------------------------------------------------------------------ #
+
+    def load_auth_user(self, alias: str) -> AuthUserRecord | None:
+        rows = self._execute(
+            "SELECT alias, password_hash FROM auth_users WHERE alias = {p}".format(p=self._ph),
+            (alias,),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return AuthUserRecord(alias=_row_value(row, "alias"), password_hash=_row_value(row, "password_hash"))
+
+    def create_auth_user(self, user: AuthUserRecord) -> None:
+        p = self._ph
+        self._execute_write(
+            f"INSERT INTO auth_users (alias, password_hash) VALUES ({p}, {p})",
+            (user.alias, user.password_hash),
         )
 
     # ------------------------------------------------------------------ #

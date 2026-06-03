@@ -1,30 +1,32 @@
-import { useEffect } from 'react';
-import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import AuthoringStudio from './AuthoringStudio';
 import { useGame } from './context/GameContext';
 import { useGameActions } from './context/useGameActions';
 import type { CaseDocument } from './types';
-import { CrestMark, MediaPlate, PanelHeader, SuspicionMeter } from './ui';
+import { CrestMark, MediaPlate, SuspicionMeter } from './ui';
 import ArchiveView from './views/ArchiveView';
+import AuthView from './views/AuthView';
 import BoardView from './views/BoardView';
 import CommunityView from './views/CommunityView';
+import HomeView from './views/HomeView';
 import IntakeView from './views/IntakeView';
 import InterrogationView from './views/InterrogationView';
 import SubmissionView from './views/SubmissionView';
 
 type ViewId = 'intake' | 'archive' | 'interrogation' | 'board' | 'submission' | 'community' | 'authoring';
+type TabId = 'home' | ViewId;
 
-const tabs: Array<{ id: ViewId; label: string; glyph: string }> = [
+const caseTabs: Array<{ id: ViewId; label: string; glyph: string }> = [
   { id: 'intake', label: 'Intake', glyph: '⌘' },
   { id: 'archive', label: 'Archive', glyph: '▣' },
   { id: 'interrogation', label: 'Interrogation', glyph: '✦' },
   { id: 'board', label: 'Evidence Board', glyph: '⌗' },
   { id: 'submission', label: 'Submission', glyph: '✓' },
   { id: 'community', label: 'Community', glyph: '◌' },
-  { id: 'authoring', label: 'Authoring', glyph: '✎' },
 ];
 
-const overviewLinks: Array<{ label: string; view: ViewId }> = [
+const overviewLinks: Array<{ label: string; view: Exclude<ViewId, 'authoring'> }> = [
   { label: 'Case Brief', view: 'intake' },
   { label: 'Archive', view: 'archive' },
   { label: 'Interrogation', view: 'interrogation' },
@@ -32,15 +34,16 @@ const overviewLinks: Array<{ label: string; view: ViewId }> = [
   { label: 'Community', view: 'community' },
 ];
 
-// Shell that reads caseId from the URL and loads the case
 function CaseShell() {
-  const { caseId = '', view = 'interrogation' } = useParams<{ caseId: string; view: string }>();
+  const { caseId = '' } = useParams<{ caseId: string }>();
   const { state, dispatch } = useGame();
   const actions = useGameActions();
   const navigate = useNavigate();
+  const location = useLocation();
+  const lastSessionSuspectRef = useRef('');
 
   useEffect(() => {
-    if (caseId && caseId !== state.selectedCaseId) {
+    if (caseId && (caseId !== state.selectedCaseId || state.caseDetail?.case.id !== caseId)) {
       dispatch({ type: 'SET_SELECTED_CASE', payload: caseId });
       void actions.loadCase(caseId);
     }
@@ -49,9 +52,20 @@ function CaseShell() {
   const { caseDetail, saveState, conversations, communityStats, unlockedSuspects } = state;
   const currentState = saveState ?? caseDetail?.state ?? null;
   const selectedSuspect =
-    caseDetail?.suspects.find((s) => s.id === state.selectedSuspectId) ?? caseDetail?.suspects[0];
+    caseDetail?.suspects.find((suspect) => suspect.id === state.selectedSuspectId) ?? caseDetail?.suspects[0];
   const selectedDocument =
-    caseDetail?.documents.find((d) => d.id === state.selectedDocumentId) ?? caseDetail?.documents[0];
+    caseDetail?.documents.find((document) => document.id === state.selectedDocumentId) ?? caseDetail?.documents[0];
+
+  useEffect(() => {
+    if (!location.pathname.endsWith('/interrogation')) {
+      lastSessionSuspectRef.current = '';
+      return;
+    }
+    if (!state.isAuthenticated || !selectedSuspect?.id) return;
+    if (lastSessionSuspectRef.current === selectedSuspect.id) return;
+    lastSessionSuspectRef.current = selectedSuspect.id;
+    void actions.beginInterrogationSession(selectedSuspect.id);
+  }, [location.pathname, selectedSuspect?.id, state.isAuthenticated]);
 
   function openDocumentAttachment(doc: CaseDocument | null) {
     if (!doc?.image_url) return;
@@ -75,10 +89,7 @@ function CaseShell() {
       {state.loading ? <div className="rail-panel loading-panel">Loading dossier...</div> : null}
 
       <Routes>
-        <Route
-          path="intake"
-          element={caseDetail ? <IntakeView caseDetail={caseDetail} /> : null}
-        />
+        <Route path="intake" element={caseDetail ? <IntakeView caseDetail={caseDetail} /> : null} />
         <Route
           path="archive"
           element={
@@ -91,10 +102,13 @@ function CaseShell() {
                 onTogglePin={actions.handleTogglePin}
                 onOpenAttachment={openDocumentAttachment}
                 searchQuery={state.searchQuery}
-                onSearchQueryChange={(q) => dispatch({ type: 'SET_SEARCH_QUERY', payload: q })}
+                onSearchQueryChange={(query) => dispatch({ type: 'SET_SEARCH_QUERY', payload: query })}
                 searchResults={state.searchResults}
                 rescanResults={state.rescanResults}
-                onSearch={async (e) => { e.preventDefault(); await actions.handleSearch(); }}
+                onSearch={async (event) => {
+                  event.preventDefault();
+                  await actions.handleSearch();
+                }}
                 onRescan={actions.handleRescan}
               />
             ) : null
@@ -111,6 +125,8 @@ function CaseShell() {
                 selectedDocument={selectedDocument}
                 conversations={conversations}
                 clueCards={state.clueCards}
+                groundingResults={state.lastGroundingResults}
+                leadMessages={state.leadMessages}
                 followUpPrompts={state.followUpPrompts}
                 onTalk={actions.handleTalkStreaming}
                 onConfront={actions.handleConfront}
@@ -148,11 +164,7 @@ function CaseShell() {
         />
         <Route
           path="community"
-          element={
-            communityStats ? (
-              <CommunityView suspects={unlockedSuspects} communityStats={communityStats} />
-            ) : null
-          }
+          element={communityStats ? <CommunityView suspects={unlockedSuspects} communityStats={communityStats} /> : null}
         />
         <Route
           path="authoring"
@@ -177,16 +189,54 @@ function CaseShell() {
 function AppShell() {
   const { state, dispatch } = useGame();
   const actions = useGameActions();
+  const location = useLocation();
   const navigate = useNavigate();
 
   useEffect(() => {
-    void actions.loadCases();
-  }, [state.alias]);
+    if (!state.isAuthenticated && state.aliasDraft) {
+      void actions.restoreSession();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (state.isAuthenticated) {
+      void actions.loadCases();
+    }
+  }, [state.isAuthenticated, state.alias]);
+
+  if (!state.isAuthenticated) {
+    return (
+      <AuthView
+        alias={state.aliasDraft}
+        onAliasChange={(value) => dispatch({ type: 'SET_ALIAS_DRAFT', payload: value })}
+        onRegister={actions.register}
+        onLogin={actions.login}
+        loading={state.loading}
+        error={state.error}
+      />
+    );
+  }
 
   const caseId = state.selectedCaseId;
+  const isLibraryRoute = location.pathname === '/' || location.pathname === '/authoring';
+  const tabs: Array<{ id: TabId; label: string; glyph: string }> = [
+    { id: 'home', label: 'Home', glyph: '⌂' },
+    ...caseTabs,
+    { id: 'authoring', label: 'Authoring', glyph: '✎' },
+  ];
 
-  function navTo(view: ViewId) {
-    if (caseId) navigate(`/${caseId}/${view}`);
+  function navTo(view: TabId) {
+    if (view === 'home') {
+      navigate('/');
+      return;
+    }
+    if (view === 'authoring') {
+      navigate(caseId ? `/${caseId}/authoring` : '/authoring');
+      return;
+    }
+    if (caseId) {
+      navigate(`/${caseId}/${view}`);
+    }
   }
 
   const { caseDetail, saveState, conversations, unlockedSuspects } = state;
@@ -204,13 +254,13 @@ function AppShell() {
         </div>
         <div className="command-stat">
           <span className="command-label">Case</span>
-          <strong>{caseDetail?.case.title ?? 'Awaiting Case'}</strong>
-          <span className="command-meta">{caseId || 'No case id'}</span>
+          <strong>{caseDetail?.case.title ?? 'Case Library'}</strong>
+          <span className="command-meta">{caseId || 'Browse all cases'}</span>
         </div>
         <div className="command-stat">
           <span className="command-label">Detective</span>
           <strong>{state.alias}</strong>
-          <span className="command-meta">Consulting Detective</span>
+          <span className="command-meta">{state.sessionRole === 'admin' ? 'Admin Review Access' : 'Player Access'}</span>
         </div>
         <div className="command-stat command-stat-wide">
           <span className="command-label">Suspicion Level</span>
@@ -226,8 +276,12 @@ function AppShell() {
           </div>
         </div>
         <div className="command-icons">
-          <button className="icon-button" type="button" aria-label="Search interface">⌕</button>
-          <button className="icon-button" type="button" aria-label="Alerts">◌</button>
+          <button className="icon-button" type="button" aria-label="Search interface">
+            ⌕
+          </button>
+          <button className="icon-button" type="button" aria-label="Alerts">
+            ◌
+          </button>
           <div className="detective-badge">{state.alias.slice(0, 2).toUpperCase()}</div>
         </div>
       </header>
@@ -243,189 +297,272 @@ function AppShell() {
 
       <div className="workspace">
         <aside className="left-rail">
-          <section className="rail-panel">
-            <div className="rail-heading">
-              <span>Case Navigation</span>
-              <strong>{caseDetail?.case.title ?? 'Case Overview'}</strong>
-            </div>
-            <div className="nav-list">
-              {overviewLinks.map((link) => (
-                <button key={link.label} className="nav-link" onClick={() => navTo(link.view)}>
-                  <span className="nav-bullet">•</span>
-                  {link.label}
-                </button>
-              ))}
-            </div>
-          </section>
+          {isLibraryRoute ? (
+            <>
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Library Status</span>
+                  <strong>{state.cases.length.toString().padStart(2, '0')}</strong>
+                </div>
+                <div className="folder-list">
+                  <div className="folder-row static-row">
+                    <span>Approved Cases</span>
+                    <strong>{state.cases.length}</strong>
+                  </div>
+                  <div className="folder-row static-row">
+                    <span>Pending Review</span>
+                    <strong>{state.pendingCases.length}</strong>
+                  </div>
+                </div>
+              </section>
 
-          <section className="rail-panel">
-            <div className="rail-heading">
-              <span>Suspects</span>
-              <strong>{unlockedSuspects.length.toString().padStart(2, '0')}</strong>
-            </div>
-            <div className="suspect-stack">
-              {unlockedSuspects.map((suspect) => {
-                const suspectConvo = conversations[suspect.id];
-                const derivedHeat = suspectConvo
-                  ? Math.min(100, suspectConvo.guardedness + (suspectConvo.trust < 40 ? 20 : 0))
-                  : 0;
-                const suspicionLabel = derivedHeat >= 75 ? 'High' : derivedHeat >= 50 ? 'Medium' : 'Low';
-                return (
-                  <button
-                    key={suspect.id}
-                    className={
-                      state.selectedSuspectId === suspect.id ? 'suspect-list-card active' : 'suspect-list-card'
-                    }
-                    onClick={() => {
-                      dispatch({ type: 'SET_SELECTED_SUSPECT', payload: suspect.id });
-                      navTo('interrogation');
-                    }}
-                  >
-                    <MediaPlate
-                      src={suspect.image_url}
-                      alt={suspect.display_name}
-                      kind="suspect"
-                      label={suspect.portrait_key ?? suspect.display_name.slice(0, 2)}
-                      className="suspect-list-photo"
-                    />
-                    <div className="suspect-list-copy">
-                      <strong>{suspect.display_name}</strong>
-                      <span>{suspect.public_profile.role}</span>
-                      <div className="mini-suspicion-row">
-                        <span>Suspicion</span>
-                        <strong className={`severity-pill severity-${suspicionLabel.toLowerCase()}`}>
-                          {suspicionLabel}
-                        </strong>
-                      </div>
-                    </div>
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Quick Actions</span>
+                  <strong>Launch</strong>
+                </div>
+                <div className="nav-list">
+                  <button className="nav-link" onClick={() => navigate('/')}>
+                    <span className="nav-bullet">•</span>
+                    Case Library
                   </button>
-                );
-              })}
-            </div>
-          </section>
+                  <button className="nav-link" onClick={() => navigate('/authoring')}>
+                    <span className="nav-bullet">•</span>
+                    Authoring Studio
+                  </button>
+                </div>
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Case Navigation</span>
+                  <strong>{caseDetail?.case.title ?? 'Case Overview'}</strong>
+                </div>
+                <div className="nav-list">
+                  {overviewLinks.map((link) => (
+                    <button key={link.label} className="nav-link" onClick={() => navTo(link.view)}>
+                      <span className="nav-bullet">•</span>
+                      {link.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
 
-          <section className="rail-panel">
-            <div className="rail-heading">
-              <span>Archive Folders</span>
-              <strong>{state.folderCounts.length.toString().padStart(2, '0')}</strong>
-            </div>
-            <div className="folder-list">
-              {state.folderCounts.map(([folder, count]) => (
-                <button key={folder} className="folder-row" onClick={() => navTo('archive')}>
-                  <span>{folder.replace(/_/g, ' ')}</span>
-                  <strong>{count}</strong>
-                </button>
-              ))}
-            </div>
-          </section>
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Suspects</span>
+                  <strong>{unlockedSuspects.length.toString().padStart(2, '0')}</strong>
+                </div>
+                <div className="suspect-stack">
+                  {unlockedSuspects.map((suspect) => {
+                    const suspectConvo = conversations[suspect.id];
+                    const derivedHeat = suspectConvo
+                      ? Math.min(100, suspectConvo.guardedness + (suspectConvo.trust < 40 ? 20 : 0))
+                      : 0;
+                    const suspicionLabel = derivedHeat >= 75 ? 'High' : derivedHeat >= 50 ? 'Medium' : 'Low';
+                    return (
+                      <button
+                        key={suspect.id}
+                        className={state.selectedSuspectId === suspect.id ? 'suspect-list-card active' : 'suspect-list-card'}
+                        onClick={() => {
+                          dispatch({ type: 'SET_SELECTED_SUSPECT', payload: suspect.id });
+                          navTo('interrogation');
+                        }}
+                      >
+                        <MediaPlate
+                          src={suspect.image_url}
+                          alt={suspect.display_name}
+                          kind="suspect"
+                          label={suspect.portrait_key ?? suspect.display_name.slice(0, 2)}
+                          className="suspect-list-photo"
+                        />
+                        <div className="suspect-list-copy">
+                          <strong>{suspect.display_name}</strong>
+                          <span>{suspect.public_profile.role}</span>
+                          <div className="mini-suspicion-row">
+                            <span>Suspicion</span>
+                            <strong className={`severity-pill severity-${suspicionLabel.toLowerCase()}`}>
+                              {suspicionLabel}
+                            </strong>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Archive Folders</span>
+                  <strong>{state.folderCounts.length.toString().padStart(2, '0')}</strong>
+                </div>
+                <div className="folder-list">
+                  {state.folderCounts.map(([folder, count]) => (
+                    <button key={folder} className="folder-row" onClick={() => navTo('archive')}>
+                      <span>{folder.replace(/_/g, ' ')}</span>
+                      <strong>{count}</strong>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
 
           <section className="rail-panel rail-identity">
-            <label className="alias-box">
-              Detective Alias
-              <input
-                value={state.aliasDraft}
-                onChange={(e) => dispatch({ type: 'SET_ALIAS_DRAFT', payload: e.target.value })}
-              />
-            </label>
-            <button
-              className="dossier-button dossier-button-ghost"
-              onClick={() => dispatch({ type: 'COMMIT_ALIAS' })}
-            >
-              Update Detective Identity
+            <div className="rail-heading">
+              <span>Session</span>
+              <strong>{state.sessionRole.toUpperCase()}</strong>
+            </div>
+            <p className="objective-copy">Signed in as {state.alias}.</p>
+            <button className="dossier-button dossier-button-ghost" onClick={actions.logout}>
+              Logout
             </button>
           </section>
         </aside>
 
         <Routes>
-          <Route path="/:caseId/*" element={<CaseShell />} />
           <Route
             path="/"
             element={
-              state.cases[0] ? (
-                <Navigate to={`/${state.cases[0].id}/interrogation`} replace />
-              ) : (
-                <main className="center-stage">
-                  <div className="rail-panel loading-panel">
-                    {state.loading ? 'Loading cases…' : 'No cases found.'}
-                  </div>
-                </main>
-              )
+              <HomeView
+                cases={state.cases}
+                pendingCases={state.pendingCases}
+                role={state.sessionRole}
+                searchQuery={state.caseSearchQuery}
+                onSearchQueryChange={(value) => dispatch({ type: 'SET_CASE_SEARCH_QUERY', payload: value })}
+                onSelectCase={(id) => {
+                  dispatch({ type: 'SET_SELECTED_CASE', payload: id });
+                  navigate(`/${id}/interrogation`);
+                }}
+                onReviewCase={(id) => {
+                  dispatch({ type: 'SET_SELECTED_CASE', payload: id });
+                  navigate(`/${id}/authoring`);
+                }}
+                onOpenAuthoring={() => navigate('/authoring')}
+              />
             }
           />
+          <Route
+            path="/authoring"
+            element={
+              <AuthoringStudio
+                alias={state.alias}
+                currentCaseId={state.selectedCaseId}
+                onSelectCase={(id) => {
+                  dispatch({ type: 'SET_SELECTED_CASE', payload: id });
+                  navigate(`/${id}/interrogation`);
+                }}
+                onPlayableCasesChanged={actions.reloadPlayableCases}
+              />
+            }
+          />
+          <Route path="/:caseId/*" element={<CaseShell />} />
         </Routes>
 
         <aside className="right-rail">
-          <section className="rail-panel">
-            <div className="rail-heading">
-              <span>Pinned Evidence</span>
-              <strong>{state.pinnedDocuments.length.toString().padStart(2, '0')}</strong>
-            </div>
-            <div className="pinboard-grid">
-              {state.pinnedDocuments.slice(0, 4).map((doc) => (
-                <button
-                  key={doc.id}
-                  className="pinboard-card"
-                  onClick={() => dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: doc.id })}
-                >
-                  <MediaPlate
-                    src={doc.image_url}
-                    alt={doc.title}
-                    kind="evidence"
-                    label={doc.id.toUpperCase()}
-                    className="pinboard-media"
-                  />
-                  <strong>{doc.title}</strong>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="rail-panel">
-            <div className="rail-heading">
-              <span>Contradiction Log</span>
-              <strong>{state.contradictionItems.length.toString().padStart(2, '0')}</strong>
-            </div>
-            <div className="contradiction-stack">
-              {state.contradictionItems.length ? (
-                state.contradictionItems.map((item) => (
-                  <article key={item.title} className={`contradiction-card ${item.severity}`}>
-                    <div className="contradiction-topline">
-                      <span>{item.severity}</span>
-                      <strong>{item.title}</strong>
-                    </div>
-                    <p>{item.source}</p>
-                  </article>
-                ))
-              ) : (
-                <div className="empty-state compact">
-                  No contradictions logged yet. Interrogate, search, and rescan to create pressure points.
+          {isLibraryRoute ? (
+            <>
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Library Guide</span>
+                  <strong>Flow</strong>
                 </div>
-              )}
-            </div>
-          </section>
+                <p className="objective-copy">
+                  Search approved cases from the home screen, open one from the library, and return here whenever you
+                  want to switch investigations.
+                </p>
+              </section>
 
-          <section className="rail-panel theory-rail">
-            <div className="rail-heading">
-              <span>Theory Board Progress</span>
-              <strong>{Math.min(100, 18 + (currentState?.board_links.length ?? 0) * 12)}%</strong>
-            </div>
-            <div className="rail-theory-widget">
-              <div className="rail-theory-node">Motive</div>
-              <div className="rail-theory-node center">Truth</div>
-              <div className="rail-theory-node">Means</div>
-            </div>
-            <button className="dossier-button dossier-button-ghost" onClick={() => navTo('board')}>
-              Open Theory Board
-            </button>
-          </section>
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Access Level</span>
+                  <strong>{state.sessionRole.toUpperCase()}</strong>
+                </div>
+                <p className="objective-copy">
+                  {state.sessionRole === 'admin'
+                    ? 'Admin accounts can browse public cases, review pending drafts, and approve cases after moderation.'
+                    : 'Player accounts can browse, search, play approved cases, and create private drafts in the authoring studio.'}
+                </p>
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Pinned Evidence</span>
+                  <strong>{state.pinnedDocuments.length.toString().padStart(2, '0')}</strong>
+                </div>
+                <div className="pinboard-grid">
+                  {state.pinnedDocuments.slice(0, 4).map((doc) => (
+                    <button
+                      key={doc.id}
+                      className="pinboard-card"
+                      onClick={() => dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: doc.id })}
+                    >
+                      <MediaPlate
+                        src={doc.image_url}
+                        alt={doc.title}
+                        kind="evidence"
+                        label={doc.id.toUpperCase()}
+                        className="pinboard-media"
+                      />
+                      <strong>{doc.title}</strong>
+                    </button>
+                  ))}
+                </div>
+              </section>
 
-          <section className="rail-panel">
-            <div className="rail-heading">
-              <span>Current Objective</span>
-              <strong>Live</strong>
-            </div>
-            <p className="objective-copy">{currentState?.current_objective ?? 'Loading objective...'}</p>
-          </section>
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Contradiction Log</span>
+                  <strong>{state.contradictionItems.length.toString().padStart(2, '0')}</strong>
+                </div>
+                <div className="contradiction-stack">
+                  {state.contradictionItems.length ? (
+                    state.contradictionItems.map((item) => (
+                      <article key={item.title} className={`contradiction-card ${item.severity}`}>
+                        <div className="contradiction-topline">
+                          <span>{item.severity}</span>
+                          <strong>{item.title}</strong>
+                        </div>
+                        <p>{item.source}</p>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty-state compact">
+                      No contradictions logged yet. Interrogate, search, and rescan to create pressure points.
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="rail-panel theory-rail">
+                <div className="rail-heading">
+                  <span>Theory Board Progress</span>
+                  <strong>{Math.min(100, 18 + (currentState?.board_links.length ?? 0) * 12)}%</strong>
+                </div>
+                <div className="rail-theory-widget">
+                  <div className="rail-theory-node">Motive</div>
+                  <div className="rail-theory-node center">Truth</div>
+                  <div className="rail-theory-node">Means</div>
+                </div>
+                <button className="dossier-button dossier-button-ghost" onClick={() => navTo('board')}>
+                  Open Theory Board
+                </button>
+              </section>
+
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Current Objective</span>
+                  <strong>Live</strong>
+                </div>
+                <p className="objective-copy">{currentState?.current_objective ?? 'Loading objective...'}</p>
+              </section>
+            </>
+          )}
         </aside>
       </div>
 
@@ -440,7 +577,7 @@ function AppShell() {
             role="dialog"
             aria-modal="true"
             aria-label={state.mediaPreview.title}
-            onClick={(e) => e.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
           >
             <div className="document-toolbar">
               <span>{state.mediaPreview.eyebrow}</span>

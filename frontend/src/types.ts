@@ -23,13 +23,50 @@ export type CaseSummary = {
   difficulty: string;
   estimated_minutes: number;
   version: number;
+  status: string;
+  owner_alias?: string | null;
   cover_image_path?: string | null;
   cover_image_url?: string | null;
+};
+
+export type SessionRole = 'player' | 'admin';
+
+export type SessionInfo = {
+  token: string;
+  alias: string;
+  role: SessionRole;
+};
+
+export type SessionStatus = {
+  alias: string;
+  role: SessionRole;
+};
+
+export type AuthRegisterRequest = {
+  alias: string;
+  password: string;
+  admin_code?: string | null;
+};
+
+export type AuthLoginRequest = {
+  alias: string;
+  password: string;
+  admin_code?: string | null;
 };
 
 export type PublicProfile = {
   role: string;
   summary: string;
+};
+
+export type PersonalityProfile = {
+  traits: string[];
+  speaking_style: string;
+  catchphrase: string;
+  verbal_tells: string[];
+  outward_goal: string;
+  protective_target: string;
+  protective_reason: string;
 };
 
 export type Suspect = {
@@ -130,6 +167,10 @@ export type DialogueResponse = {
   reply: string;
   new_context: string[];
   revealed_fact_ids: string[];
+  grounding_results: SearchResult[];
+  unlocked_documents: string[];
+  unlocked_suspects: string[];
+  lead_messages: string[];
   suspicion_level: number;
   conversation: ConversationState;
 };
@@ -202,6 +243,7 @@ export type MemoryRules = {
 };
 
 export type AuthoringSuspect = Suspect & {
+  personality_profile: PersonalityProfile;
   private_truth: PrivateTruth;
   dialogue_rules: DialogueRules;
   memory_rules: MemoryRules;
@@ -214,6 +256,8 @@ export type AuthoringCaseConfig = {
   difficulty: string;
   estimated_minutes: number;
   version: number;
+  status: string;
+  owner_alias?: string | null;
   police_summary: string;
   cover_image_path?: string | null;
   cover_image_url?: string | null;
@@ -249,6 +293,36 @@ export type CreateCaseRequest = {
   hook: string;
   difficulty: string;
   estimated_minutes: number;
+};
+
+export type CaseBriefInput = {
+  case_id: string;
+  brief: string;
+  difficulty: string;
+  estimated_minutes: number;
+};
+
+export type CaseIngestionInput = {
+  case_id: string;
+  source_text: string;
+  difficulty: string;
+  estimated_minutes: number;
+  title_hint?: string | null;
+};
+
+export type SourceGrounding = {
+  generated_field: string;
+  supporting_chunk_ids: string[];
+  preview: string;
+};
+
+export type GenerateCaseDraftResponse = {
+  bundle: AuthoringBundle;
+  warnings: string[];
+};
+
+export type CaseIngestionResponse = GenerateCaseDraftResponse & {
+  groundings: SourceGrounding[];
 };
 
 export type ContradictionItem = {

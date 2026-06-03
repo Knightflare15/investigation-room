@@ -133,6 +133,25 @@ export default function ArchiveView({
         <div className="archive-intel-column">
           <section className="intel-card">
             <div className="intel-card-header">
+              <span>Unlocked Documents</span>
+              <strong>{unlockedDocuments.length.toString().padStart(2, '0')}</strong>
+            </div>
+            <div className="intel-list">
+              {unlockedDocuments.map((document) => (
+                <button
+                  key={document.id}
+                  className="intel-row"
+                  onClick={() => onSelectDocument(document.id)}
+                >
+                  <strong>{document.title}</strong>
+                  <span>{document.summary || document.folder.replace(/_/g, ' ')}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="intel-card">
+            <div className="intel-card-header">
               <span>Search Results</span>
               <strong>{searchResults.length.toString().padStart(2, '0')}</strong>
             </div>

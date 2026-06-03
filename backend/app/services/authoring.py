@@ -2,23 +2,31 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
 
 from ..case_loader import load_authoring_bundle
+from ..config import settings
 from ..models import (
     ArchiveDomain,
     AssetEntry,
     AuthoringBundle,
+    CaseBriefInput,
+    CaseIngestionInput,
+    CaseIngestionResponse,
     CaseConfig,
     CaseDocument,
     CreateCaseRequest,
+    GenerateCaseDraftResponse,
     LocationDossier,
     StartState,
     SubmissionConfig,
     SuspectConfig,
 )
+from .brief_generator import BriefGenerationService
+from .source_ingestion import SourceIngestionService
 
 
 def _slugify(value: str) -> str:
@@ -30,11 +38,20 @@ class AuthoringService:
     def __init__(self, cases_root: Path) -> None:
         self.cases_root = cases_root
         self.cases_root.mkdir(parents=True, exist_ok=True)
+        self.generator = BriefGenerationService()
+        self.source_ingestion = SourceIngestionService(settings)
 
     def case_dir(self, case_id: str) -> Path:
         return self.cases_root / case_id
 
-    def create_case(self, payload: CreateCaseRequest) -> AuthoringBundle:
+    def is_admin(self, alias: str) -> bool:
+        return alias in settings.admin_aliases
+
+    def _can_access_case(self, case_id: str, alias: str) -> bool:
+        bundle = load_authoring_bundle(self.case_dir(case_id))
+        return bundle.case.status == "approved" or bundle.case.owner_alias == alias or self.is_admin(alias)
+
+    def create_case(self, payload: CreateCaseRequest, owner_alias: str) -> AuthoringBundle:
         case_dir = self.case_dir(payload.id)
         if case_dir.exists():
             raise ValueError(f"Case '{payload.id}' already exists")
@@ -52,7 +69,10 @@ class AuthoringService:
             difficulty=payload.difficulty,
             estimated_minutes=payload.estimated_minutes,
             version=1,
+            status="draft",
+            owner_alias=owner_alias,
             police_summary="Replace this with the police first-pass intake for your mystery.",
+            cover_image_path="locations/template-cover.svg",
             start_state=StartState(
                 initial_suspect_ids=["sus_primary"],
                 initial_document_ids=["doc_incident"],
@@ -85,9 +105,19 @@ class AuthoringService:
                 "display_name": "Primary Suspect",
                 "unlock_rule": None,
                 "portrait_key": "PS",
+                "image_path": "suspects/template-suspect.svg",
                 "public_profile": {
                     "role": "Replace role",
                     "summary": "Replace with a short public description.",
+                },
+                "personality_profile": {
+                    "traits": ["Replace with a personality trait."],
+                    "speaking_style": "Measured, guarded, and deliberate.",
+                    "catchphrase": "Let's stay precise.",
+                    "verbal_tells": ["Avoids direct blame when under pressure."],
+                    "outward_goal": "Protect their public image.",
+                    "protective_target": "",
+                    "protective_reason": "",
                 },
                 "private_truth": {
                     "facts_known": ["Replace with a fact the suspect truly knows."],
@@ -119,6 +149,7 @@ class AuthoringService:
             body="Replace this document body with the first authored evidence file for your mystery.",
             markdown_path=f"cases/{payload.id}/archive/doc-001-incident-summary.md",
             entity_tags=["victim", "timeline"],
+            image_path="evidence/template-evidence.svg",
         )
 
         prompts = {
@@ -132,29 +163,43 @@ class AuthoringService:
         }
 
         bundle = AuthoringBundle(case=case_config, suspects=[suspect], documents=[document], prompts=prompts, assets=[])
-        self.save_bundle(payload.id, bundle)
-        return self.load_bundle(payload.id)
+        self.save_bundle(payload.id, bundle, owner_alias)
+        return self.load_bundle(payload.id, owner_alias)
 
-    def load_bundle(self, case_id: str) -> AuthoringBundle:
+    def load_bundle(self, case_id: str, alias: str) -> AuthoringBundle:
+        if not self._can_access_case(case_id, alias):
+            raise ValueError("You do not have access to this draft case")
         return load_authoring_bundle(self.case_dir(case_id))
 
-    def list_bundles(self) -> list[AuthoringBundle]:
+    def list_bundles(self, alias: str) -> list[AuthoringBundle]:
         bundles: list[AuthoringBundle] = []
         for case_dir in sorted(path for path in self.cases_root.iterdir() if path.is_dir()):
-            bundles.append(self.load_bundle(case_dir.name))
+            bundle = load_authoring_bundle(case_dir)
+            if bundle.case.status == "approved" or bundle.case.owner_alias == alias or self.is_admin(alias):
+                bundles.append(bundle)
         return bundles
 
-    def save_bundle(self, case_id: str, bundle: AuthoringBundle) -> AuthoringBundle:
+    def save_bundle(self, case_id: str, bundle: AuthoringBundle, actor_alias: str) -> AuthoringBundle:
         case_dir = self.case_dir(case_id)
         if not case_dir.exists():
             raise ValueError(f"Case '{case_id}' does not exist")
         if bundle.case.id != case_id:
             raise ValueError("Case ID in bundle must match the URL case ID")
-
         archive_dir = case_dir / "archive"
         prompts_dir = case_dir / "prompts"
         archive_dir.mkdir(parents=True, exist_ok=True)
         prompts_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_template_assets(case_dir)
+
+        existing = load_authoring_bundle(case_dir) if (case_dir / "case.json").exists() else None
+        owner_alias = (existing.case.owner_alias if existing else None) or actor_alias
+        if existing and not (self.is_admin(actor_alias) or owner_alias == actor_alias):
+            raise ValueError("You do not have permission to edit this case")
+        if not self.is_admin(actor_alias):
+            bundle.case.status = "draft"
+            bundle.case.owner_alias = owner_alias
+        elif not bundle.case.owner_alias:
+            bundle.case.owner_alias = owner_alias
 
         case_json = bundle.case.model_dump(mode="json", exclude={"cover_image_url"})
         case_json["archive_domains"] = [
@@ -205,12 +250,15 @@ class AuthoringService:
         for name, content in bundle.prompts.items():
             (prompts_dir / f"{name}.txt").write_text(content.strip() + "\n", encoding="utf-8")
 
-        return self.load_bundle(case_id)
+        return self.load_bundle(case_id, actor_alias)
 
-    def save_asset(self, case_id: str, folder: str, filename: str, content: bytes) -> AssetEntry:
+    def save_asset(self, case_id: str, folder: str, filename: str, content: bytes, actor_alias: str) -> AssetEntry:
         case_dir = self.case_dir(case_id)
         if not case_dir.exists():
             raise ValueError(f"Case '{case_id}' does not exist")
+        bundle = load_authoring_bundle(case_dir)
+        if not (self.is_admin(actor_alias) or bundle.case.owner_alias == actor_alias):
+            raise ValueError("You do not have permission to upload assets for this case")
 
         safe_folder = _slugify(folder).replace("-", "_")
         extension = Path(filename).suffix.lower() or ".bin"
@@ -224,3 +272,70 @@ class AuthoringService:
             url=f"/case-assets/{case_id}/assets/{relative_path.as_posix()}",
             kind=safe_folder,
         )
+
+    def generate_case_from_brief(self, payload: CaseBriefInput, owner_alias: str) -> GenerateCaseDraftResponse:
+        parsed = self.generator.parse_brief(payload)
+        extracted = self.generator.extract_case_draft(parsed)
+        bundle = self.generator.generate_bundle(extracted, owner_alias, payload.difficulty, payload.estimated_minutes)
+        case_dir = self.case_dir(payload.case_id)
+        if case_dir.exists():
+            raise ValueError(f"Case '{payload.case_id}' already exists")
+        (case_dir / "archive").mkdir(parents=True, exist_ok=True)
+        (case_dir / "prompts").mkdir(parents=True, exist_ok=True)
+        self._ensure_template_assets(case_dir)
+        saved = self.save_bundle(payload.case_id, bundle, owner_alias)
+        return GenerateCaseDraftResponse(bundle=saved, warnings=extracted.warnings)
+
+    def ingest_case_from_source(self, payload: CaseIngestionInput, owner_alias: str) -> CaseIngestionResponse:
+        extracted, groundings = self.source_ingestion.extract(payload)
+        bundle = self.generator.generate_bundle(extracted, owner_alias, payload.difficulty, payload.estimated_minutes)
+        grounding_notes = "\n".join(
+            f"- {grounding.generated_field}: {', '.join(grounding.supporting_chunk_ids)} | {grounding.preview}"
+            for grounding in groundings
+        )
+        if grounding_notes:
+            bundle.prompts["interrogation_system"] = (
+                bundle.prompts["interrogation_system"]
+                + " This case was generated from source-ingested material; favor details supported by the source grounding notes."
+            )
+            bundle.prompts["source_grounding_notes"] = grounding_notes
+        case_dir = self.case_dir(payload.case_id)
+        if case_dir.exists():
+            raise ValueError(f"Case '{payload.case_id}' already exists")
+        (case_dir / "archive").mkdir(parents=True, exist_ok=True)
+        (case_dir / "prompts").mkdir(parents=True, exist_ok=True)
+        self._ensure_template_assets(case_dir)
+        saved = self.save_bundle(payload.case_id, bundle, owner_alias)
+        return CaseIngestionResponse(bundle=saved, warnings=extracted.warnings, groundings=groundings)
+
+    def approve_case(self, case_id: str, actor_alias: str) -> AuthoringBundle:
+        if not self.is_admin(actor_alias):
+            raise ValueError("Only admin aliases can approve cases")
+        bundle = load_authoring_bundle(self.case_dir(case_id))
+        bundle.case.status = "approved"
+        return self.save_bundle(case_id, bundle, actor_alias)
+
+    def _ensure_template_assets(self, case_dir: Path) -> None:
+        templates = {
+            case_dir / "assets" / "suspects" / "template-suspect.svg": _template_svg("Suspect", "#5c4630", "#e8dcc9"),
+            case_dir / "assets" / "evidence" / "template-evidence.svg": _template_svg("Evidence", "#3b4d5f", "#d8e4ef"),
+            case_dir / "assets" / "locations" / "template-location.svg": _template_svg("Location", "#44614b", "#d9eadf"),
+            case_dir / "assets" / "locations" / "template-cover.svg": _template_svg("Case File", "#5f3f3f", "#f0dddd"),
+        }
+        for path, content in templates.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text(content, encoding="utf-8")
+
+
+@lru_cache(maxsize=1)
+def _template_svg(label: str, accent: str, fill: str) -> str:
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 220" role="img" aria-label="{label}">
+  <rect width="320" height="220" fill="{fill}" rx="16"/>
+  <rect x="18" y="18" width="284" height="184" fill="none" stroke="{accent}" stroke-width="6" rx="12"/>
+  <circle cx="80" cy="86" r="28" fill="{accent}" opacity="0.88"/>
+  <rect x="126" y="58" width="124" height="18" fill="{accent}" opacity="0.9" rx="9"/>
+  <rect x="126" y="90" width="96" height="14" fill="{accent}" opacity="0.72" rx="7"/>
+  <rect x="54" y="150" width="214" height="20" fill="{accent}" opacity="0.82" rx="10"/>
+  <text x="160" y="196" fill="{accent}" font-size="24" font-family="Georgia, serif" text-anchor="middle">{label}</text>
+</svg>"""

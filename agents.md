@@ -5,6 +5,68 @@ Each entry lists what changed, which files were touched, and why.
 
 ---
 
+## Session 3 - Account Auth, Draft Review, and Dialogue Reliability (2026-06-02)
+
+Several larger product changes landed after Session 2: real local account auth, player/admin
+role separation, draft-case generation and approval flow, and a dialogue hardening pass for
+Ollama-backed suspect conversations. The README and interview guide were also updated so the repo
+documentation matches the current architecture.
+
+### Step A - Real local auth with player/admin roles
+
+**Problem:** the project previously relied on lightweight alias-based identity. That was enough for
+local playtesting but not for real register/login flows or admin-only review paths.
+
+**Fix:**
+- `backend/app/database.py`: added `auth_users` persistence for stored local accounts.
+- `backend/app/auth.py`: expanded to include password hashing/verification, role resolution, and
+  admin-code checks in addition to signed token issuing.
+- New `backend/app/services/accounts.py`: registration and login service layer.
+- `backend/app/main.py`: added `POST /auth/register`, `POST /auth/login`, and `GET /session`.
+- `frontend/src/views/AuthView.tsx`: added a real auth screen.
+- `frontend/src/api.ts`, `frontend/src/context/GameContext.tsx`,
+  `frontend/src/context/useGameActions.ts`, `frontend/src/App.tsx`: switched from automatic alias
+  handshake to stored account sessions restored from `localStorage`.
+
+### Step B - Draft authoring for players, approval for admins
+
+**Problem:** authoring and review behavior needed to support public-case moderation without making
+all drafts publicly visible.
+
+**Fix:**
+- Players can create and edit their own draft cases through the authoring studio.
+- Admins can do that too, plus review pending drafts and approve them for the public library.
+- Public `GET /cases` only returns approved cases; pending-case listing remains admin-only.
+- The home screen and authoring access flow were updated to reflect the two-role model.
+
+### Step C - Ollama dialogue hardening
+
+**Problem:** suspect dialogue could silently fall back from Ollama to a weak heuristic path. The
+heuristic path exposed authoring metadata directly in player-facing text with strings like
+`answers in a ... cadence`, and the non-streaming Ollama path was brittle because it depended on
+strict model-shaped JSON.
+
+**Fix:**
+- `backend/app/config.py`: added `OLLAMA_CHAT_TIMEOUT_SECONDS` and
+  `OLLAMA_STREAM_TIMEOUT_SECONDS`.
+- `backend/app/services/dialogue.py`:
+  - lighter prompt payloads for both talk paths
+  - normal `/talk` no longer depends on model-generated state JSON
+  - streamed and non-streamed replies both sanitize leaked narration/metadata
+  - heuristic fallback now returns cleaner suspect speech instead of style-note prose
+  - warning logs are emitted when Ollama fails or the reply must be sanitized/fallback is used
+- `backend/tests/test_game_flow.py` and `backend/tests/test_streaming.py`: added regression checks
+  against `cadence`/`voice`-style metadata leakage.
+
+### Step D - Documentation refresh
+
+- `README.md`: expanded with quick start, real auth flow, draft approval workflow, Ollama
+  troubleshooting, data locations, timeout settings, and updated frontend/backend behavior notes.
+- `INTERVIEW_README.md`: updated to reflect local account auth, dialogue hardening, and current
+  Ollama usage patterns.
+
+---
+
 ## Session 2 — Hardening Pass (2026-05-31)
 
 A code review of the Session 1 commit (`0b7216b`) surfaced two streaming correctness bugs, dead

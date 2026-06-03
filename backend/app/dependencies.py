@@ -6,6 +6,8 @@ from fastapi import Header, HTTPException
 
 from .auth import read_token
 from .config import settings
+from .models import SessionPrincipal
+from .services.accounts import AuthService
 from .services.authoring import AuthoringService
 from .services.game import GameService
 
@@ -20,7 +22,12 @@ def get_authoring_service() -> AuthoringService:
     return AuthoringService(settings.cases_path)
 
 
-def get_player(authorization: str | None = Header(default=None)) -> str:
+@lru_cache(maxsize=1)
+def get_auth_service() -> AuthService:
+    return AuthService(settings)
+
+
+def get_player(authorization: str | None = Header(default=None)) -> SessionPrincipal:
     """Resolve the player alias from a signed bearer token.
 
     Raises 401 if the Authorization header is missing or the token fails signature
@@ -29,7 +36,9 @@ def get_player(authorization: str | None = Header(default=None)) -> str:
     token = None
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization[7:].strip()
-    alias = read_token(token)
-    if alias is None:
+    player = read_token(token)
+    if player is None:
         raise HTTPException(status_code=401, detail="Missing or invalid session token")
-    return alias
+    if get_auth_service().db.load_auth_user(player.alias) is None:
+        raise HTTPException(status_code=401, detail="Session user no longer exists")
+    return player

@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from 'react';
-import type { CaseDetailResponse, CaseDocument, ClueCard, ConversationState, PlayerCaseState, Suspect } from '../types';
+import type { CaseDetailResponse, CaseDocument, ClueCard, ConversationState, PlayerCaseState, SearchResult, Suspect } from '../types';
 import { MediaPlate, PanelHeader } from '../ui';
 
 type Props = {
@@ -9,6 +9,8 @@ type Props = {
   selectedDocument: CaseDocument | undefined;
   conversations: Record<string, ConversationState>;
   clueCards: ClueCard[];
+  groundingResults: SearchResult[];
+  leadMessages: string[];
   followUpPrompts: string[];
   onTalk: (message: string) => Promise<void>;
   onConfront: (evidenceId: string, message: string) => Promise<void>;
@@ -21,6 +23,8 @@ export default function InterrogationView({
   selectedDocument,
   conversations,
   clueCards,
+  groundingResults,
+  leadMessages,
   followUpPrompts,
   onTalk,
   onConfront,
@@ -141,6 +145,32 @@ export default function InterrogationView({
                 </button>
               ))}
             </div>
+            {groundingResults.length ? (
+              <div className="workspace-question">
+                <p className="subheading">Retrieved Evidence Context</p>
+                <div className="intel-list">
+                  {groundingResults.map((result) => (
+                    <div key={`${result.document_id}-${result.title}`} className="intel-row">
+                      <strong>{result.title}</strong>
+                      <span>{result.snippet}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {leadMessages.length ? (
+              <div className="workspace-question new-leads-panel">
+                <p className="subheading">New Leads</p>
+                <div className="intel-list">
+                  {leadMessages.map((lead, index) => (
+                    <div key={`${lead}-${index}`} className="intel-row">
+                      <strong>Lead {index + 1}</strong>
+                      <span>{lead}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <section className="intel-card">
@@ -187,6 +217,16 @@ export default function InterrogationView({
               </button>
             </div>
           </section>
+
+          {activeConversation?.memory_summary ? (
+            <section className="intel-card">
+              <div className="intel-card-header">
+                <span>Previous Session</span>
+                <strong>Retained</strong>
+              </div>
+              <p className="document-summary">{activeConversation.memory_summary}</p>
+            </section>
+          ) : null}
         </aside>
 
         <article className="conversation-docket">
@@ -204,7 +244,14 @@ export default function InterrogationView({
             {(
               activeConversation?.transcript.length
                 ? activeConversation.transcript
-                : [{ speaker: 'System', text: 'Begin the interrogation and press for the hidden inconsistency.' }]
+                : [
+                    {
+                      speaker: 'System',
+                      text: activeConversation?.memory_summary
+                        ? 'New interrogation session started. Use the previous-session brief and press for specifics.'
+                        : 'Begin the interrogation and press for the hidden inconsistency.',
+                    },
+                  ]
             ).map((turn, index) => (
               <div key={`${turn.speaker}-${index}`} className={turn.speaker === 'detective' ? 'bubble player' : 'bubble suspect'}>
                 <strong>{turn.speaker}</strong>

@@ -153,6 +153,37 @@ class RetrievalService:
     ) -> list[SearchResult]:
         return self.search(case, document_ids, " ".join(contexts), limit=limit)
 
+    def retrieve_dialogue_context(
+        self,
+        case: LoadedCase,
+        document_ids: list[str],
+        query: str,
+        evidence: CaseDocument | None = None,
+        limit: int = 3,
+    ) -> list[SearchResult]:
+        """Return compact evidence snippets to ground dialogue replies.
+
+        This is a small RAG-style retrieval step for interrogation: given the
+        current question (and optional confronted evidence), pull the most
+        relevant unlocked archive passages so dialogue can be anchored in case
+        material instead of only the suspect profile.
+        """
+        results = self.search(case, document_ids, query, limit=limit)
+        if evidence is None:
+            return results
+
+        evidence_result = SearchResult(
+            document_id=evidence.id,
+            title=evidence.title,
+            folder=evidence.folder,
+            snippet=evidence.body[:280] + ("..." if len(evidence.body) > 280 else ""),
+            score=999.0,
+            matched_entity_tags=list(evidence.entity_tags),
+        )
+        deduped = [evidence_result]
+        deduped.extend(result for result in results if result.document_id != evidence.id)
+        return deduped[:limit]
+
     def derive_contexts(self, text: str, documents: list[CaseDocument] | None = None) -> list[str]:
         contexts = _extract_context_candidates(text)
         if documents:
@@ -163,4 +194,3 @@ class RetrievalService:
                     if tag.lower() in text.lower():
                         contexts.append(tag)
         return list(dict.fromkeys(contexts))
-

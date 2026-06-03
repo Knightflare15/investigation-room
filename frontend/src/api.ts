@@ -1,16 +1,25 @@
 import type {
+  AuthLoginRequest,
+  AuthRegisterRequest,
   AssetEntry,
   AuthoringBundle,
   BoardLinkResponse,
+  CaseBriefInput,
   CaseDetailResponse,
+  CaseIngestionInput,
+  CaseIngestionResponse,
   CaseSummary,
   CommunityStatsResponse,
+  ConversationState,
   CreateCaseRequest,
   DialogueResponse,
+  GenerateCaseDraftResponse,
   PlayerCaseState,
   RescanResponse,
   SaveStateResponse,
   SearchResponse,
+  SessionInfo,
+  SessionStatus,
   SubmitTheoryResponse,
 } from './types';
 
@@ -84,32 +93,76 @@ function normalizeAuthoringBundle(bundle: AuthoringBundle): AuthoringBundle {
   };
 }
 
-// alias -> signed bearer token. Persisted to localStorage so a reload skips the handshake.
+// alias -> signed bearer token + derived role. Persisted so a reload skips the handshake.
 const tokenCache = new Map<string, string>();
+const sessionCache = new Map<string, SessionInfo>();
 
 function tokenStorageKey(alias: string) {
   return `investigation-room-token::${alias}`;
 }
 
-/** Return a signed session token for the alias, registering one via POST /session if needed. */
-export async function ensureToken(alias: string): Promise<string> {
-  const cached = tokenCache.get(alias) ?? localStorage.getItem(tokenStorageKey(alias)) ?? undefined;
-  if (cached) {
-    tokenCache.set(alias, cached);
-    return cached;
-  }
+function sessionStorageKey(alias: string) {
+  return `investigation-room-session::${alias}`;
+}
+
+function cacheSession(session: SessionInfo): SessionInfo {
+  tokenCache.set(session.alias, session.token);
+  sessionCache.set(session.alias, session);
+  localStorage.setItem(tokenStorageKey(session.alias), session.token);
+  localStorage.setItem(sessionStorageKey(session.alias), JSON.stringify(session));
+  return session;
+}
+
+async function fetchSessionStatus(token: string): Promise<SessionStatus> {
   const response = await fetch(`${API_BASE}/session`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ alias }),
+    headers: { Authorization: `Bearer ${token}` },
   });
   if (!response.ok) {
-    throw new Error(`Session registration failed: ${response.status}`);
+    throw new Error(`Session lookup failed: ${response.status}`);
   }
-  const { token } = (await response.json()) as { token: string; alias: string };
-  tokenCache.set(alias, token);
-  localStorage.setItem(tokenStorageKey(alias), token);
-  return token;
+  return response.json() as Promise<SessionStatus>;
+}
+
+export async function restoreSession(alias: string): Promise<SessionInfo> {
+  const cachedSession = sessionCache.get(alias);
+  if (cachedSession) return cachedSession;
+
+  const storedSession = localStorage.getItem(sessionStorageKey(alias));
+  if (storedSession) {
+    try {
+      const parsed = JSON.parse(storedSession) as SessionInfo;
+      if (parsed.alias === alias && parsed.token && parsed.role) {
+        return cacheSession(parsed);
+      }
+    } catch {
+      localStorage.removeItem(sessionStorageKey(alias));
+    }
+  }
+
+  const cachedToken = tokenCache.get(alias) ?? localStorage.getItem(tokenStorageKey(alias)) ?? undefined;
+  if (cachedToken) {
+    const current = await fetchSessionStatus(cachedToken);
+    return cacheSession({ token: cachedToken, alias: current.alias, role: current.role });
+  }
+  throw new Error('No saved session found');
+}
+
+async function submitAuth(path: '/auth/register' | '/auth/login', payload: AuthRegisterRequest | AuthLoginRequest) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Authentication failed: ${response.status}`);
+  }
+  return cacheSession((await response.json()) as SessionInfo);
+}
+
+/** Return the signed bearer token for a restored authenticated session. */
+export async function ensureToken(alias: string): Promise<string> {
+  return (await restoreSession(alias)).token;
 }
 
 export async function authHeaders(alias: string): Promise<Record<string, string>> {
@@ -136,8 +189,27 @@ async function request<T>(path: string, alias: string, init?: RequestInit): Prom
 }
 
 export const api = {
+  getSession(alias: string) {
+    return restoreSession(alias);
+  },
+  register(payload: AuthRegisterRequest) {
+    return submitAuth('/auth/register', payload);
+  },
+  login(payload: AuthLoginRequest) {
+    return submitAuth('/auth/login', payload);
+  },
+  logout(alias: string) {
+    tokenCache.delete(alias);
+    sessionCache.delete(alias);
+    localStorage.removeItem(tokenStorageKey(alias));
+    localStorage.removeItem(sessionStorageKey(alias));
+  },
   async listCases(alias: string) {
     const cases = await request<CaseSummary[]>('/cases', alias);
+    return cases.map(normalizeCaseSummary);
+  },
+  async listPendingCases(alias: string) {
+    const cases = await request<CaseSummary[]>('/cases/pending', alias);
     return cases.map(normalizeCaseSummary);
   },
   async getCase(caseId: string, alias: string) {
@@ -163,6 +235,11 @@ export const api = {
     return request<DialogueResponse>(`/cases/${caseId}/suspects/${suspectId}/talk`, alias, {
       method: 'POST',
       body: JSON.stringify({ message }),
+    });
+  },
+  beginInterrogationSession(caseId: string, suspectId: string, alias: string) {
+    return request<ConversationState>(`/cases/${caseId}/suspects/${suspectId}/begin-session`, alias, {
+      method: 'POST',
     });
   },
   confront(caseId: string, suspectId: string, alias: string, evidenceId: string, message: string) {
@@ -220,6 +297,27 @@ export const api = {
     });
     return normalizeAuthoringBundle(bundle);
   },
+  async generateAuthoringCase(alias: string, payload: CaseBriefInput) {
+    const response = await request<GenerateCaseDraftResponse>('/authoring/cases/generate', alias, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return {
+      warnings: response.warnings,
+      bundle: normalizeAuthoringBundle(response.bundle),
+    };
+  },
+  async ingestAuthoringCase(alias: string, payload: CaseIngestionInput) {
+    const response = await request<CaseIngestionResponse>('/authoring/cases/ingest', alias, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return {
+      warnings: response.warnings,
+      groundings: response.groundings,
+      bundle: normalizeAuthoringBundle(response.bundle),
+    };
+  },
   async getAuthoringCase(caseId: string, alias: string) {
     const bundle = await request<AuthoringBundle>(`/authoring/cases/${caseId}`, alias);
     return normalizeAuthoringBundle(bundle);
@@ -228,6 +326,12 @@ export const api = {
     const bundle = await request<AuthoringBundle>(`/authoring/cases/${caseId}`, alias, {
       method: 'PUT',
       body: JSON.stringify(payload),
+    });
+    return normalizeAuthoringBundle(bundle);
+  },
+  async approveAuthoringCase(caseId: string, alias: string) {
+    const bundle = await request<AuthoringBundle>(`/authoring/cases/${caseId}/approve`, alias, {
+      method: 'POST',
     });
     return normalizeAuthoringBundle(bundle);
   },
