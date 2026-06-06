@@ -137,6 +137,26 @@ class GameFlowTests(unittest.TestCase):
             any(result.document_id == "doc_incident" for result in response.grounding_results),
             "expected archive grounding to include the incident summary for a hotel/suite query",
         )
+        self.assertTrue(all(result.chunk_id for result in response.grounding_results))
+
+    def test_repeated_search_reuses_chunk_embedding_cache(self) -> None:
+        counted_chunks: list[str] = []
+        original = self.game.retrieval._compute_chunk_embedding
+        self.game.retrieval.ollama.embed = lambda text: [1.0, 0.5, float(len(text) % 7)]  # type: ignore[method-assign]
+
+        def counting_compute(chunk):
+            counted_chunks.append(chunk.chunk_id)
+            return original(chunk)
+
+        self.game.retrieval._compute_chunk_embedding = counting_compute  # type: ignore[method-assign]
+        first = self.game.search_case("case-001", self.alias, SearchRequest(query="hotel suite booking", limit=4))
+        first_count = len(counted_chunks)
+        second = self.game.search_case("case-001", self.alias, SearchRequest(query="hotel suite booking", limit=4))
+
+        self.assertTrue(first.results)
+        self.assertTrue(second.results)
+        self.assertGreater(first_count, 0)
+        self.assertEqual(len(counted_chunks), first_count)
 
     def test_conversation_can_unlock_hidden_suspect_from_named_context(self) -> None:
         settings = Settings(

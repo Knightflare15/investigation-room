@@ -445,6 +445,13 @@ The authoring UI can:
 - save everything back to disk
 - approve a draft case if the current session is `admin`
 
+Draft ID behavior:
+
+- manual case IDs are now optional in all authoring entry paths
+- if the creator leaves the case ID blank, the backend auto-generates a unique draft ID from the title
+- repeated titles get numeric suffixes automatically, for example `draft-the-glass-harbor-affair` then `draft-the-glass-harbor-affair-2`
+- if the creator explicitly provides a case ID, that value is still used
+
 Required case-brief headings for generation:
 
 - `Case Title`
@@ -468,12 +475,15 @@ Backend ingestion flow:
 
 1. normalize the pasted source text
 2. split the source into stable chunks
-3. detect entities and keywords per chunk
-4. retrieve relevant chunks for extraction passes such as victim, setting, suspects, timeline, evidence, hidden truth, and solution
-5. use keyword/entity scoring plus optional Ollama embeddings for ranking
-6. convert extracted material into the existing `ExtractedCaseDraft`
-7. reuse the normal draft-bundle generator so output remains an editable `AuthoringBundle`
-8. return warnings and `SourceGrounding` notes showing which source chunks supported generated fields
+3. precompute chunk embeddings once for that ingestion request when Ollama embeddings are available
+4. detect entities and keywords per chunk
+5. retrieve relevant chunks for extraction passes such as victim, setting, suspects, timeline, evidence, hidden truth, and solution
+6. use two-stage ranking: lexical/entity shortlist first, then embedding rerank when vectors are available
+7. ask Ollama for strict JSON extraction per field group when possible, then validate it before building the draft
+8. fall back to heuristic extraction when Ollama is unavailable or returns invalid structured output
+9. convert extracted material into the existing `ExtractedCaseDraft`
+10. reuse the normal draft-bundle generator so output remains an editable `AuthoringBundle`
+11. return warnings and `SourceGrounding` notes showing which source chunks supported generated fields
 
 Generated raw-source drafts:
 
@@ -482,6 +492,12 @@ Generated raw-source drafts:
 - remain private to the creator/admin until approval
 - include source-grounding notes in the authoring response
 - save compact `source_grounding_notes` into prompts for later review
+- include per-item grounding metadata with:
+  - generated field name
+  - generated value
+  - supporting chunk ids
+  - confidence label
+  - extraction method (`ollama` or `heuristic`)
 
 Post-generation review flow:
 
@@ -489,10 +505,11 @@ Post-generation review flow:
 2. a review modal opens automatically
 3. the modal shows detected suspects, evidence, locations, warnings, and grounding notes
 4. the creator can add a structured refinement prompt if extraction missed something
-5. the same draft id is regenerated in place as long as it is still a private draft
-6. the creator can assign template assets or upload custom suspect, evidence, and location images
-7. the creator sends the draft to review
-8. the case remains `draft` until an admin approves it
+5. for raw-source ingestion, the creator can target only one section such as `suspects`, `evidence`, or `locations`
+6. if the creator supplied or kept the same draft ID, that same private draft is regenerated in place while it is still unapproved
+7. the creator can assign template assets or upload custom suspect, evidence, and location images
+8. the creator sends the draft to review
+9. the case remains `draft` until an admin approves it
 
 The current ingestion path is intentionally paste-only. It does not yet perform PDF parsing, OCR, automatic image moderation, or multi-document police-file ingestion.
 
@@ -547,6 +564,11 @@ Conversation-driven discoveries now return explicit lead metadata:
 
 For streaming interrogation, the backend sends retrieved context first, streams the visible suspect reply, then sends a final `[LEADS]` SSE event. This keeps the saved transcript equal to what the player saw while still surfacing new investigative leads in the UI.
 
+Retrieval is now more RAG-focused in two places:
+
+- gameplay retrieval caches per-chunk embeddings in memory so repeated archive searches and interrogation grounding do not keep re-embedding the same paragraphs
+- dialogue grounding now prefers smaller, higher-quality evidence snippets based on the suspect, conversation memory, pinned evidence, and recent discovered context
+
 Implementation references:
 
 - `backend/app/services/game.py`
@@ -585,8 +607,9 @@ The frontend also:
 2. frontend restores the signed session on later visits
 3. home screen loads approved cases only
 4. player can open `Authoring Studio` to create a draft case, or search the public library and open a case
-5. backend creates or loads player save state
-6. player opens unlocked documents directly from the archive screen, searches evidence, interrogates suspects in session-style conversations, runs focused rescans from specific leads in specific locations, uses the board to organize theory notes, and submits a theory
+5. when authoring, the player can leave the draft case ID blank and let the backend generate a unique non-repeating draft ID automatically
+6. backend creates or loads player save state
+7. player opens unlocked documents directly from the archive screen, searches evidence, interrogates suspects in session-style conversations, runs focused rescans from specific leads in specific locations, uses the board to organize theory notes, and submits a theory
 
 ### Admin workflow
 

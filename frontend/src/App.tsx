@@ -209,6 +209,25 @@ function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
 
+  async function handleDeleteDraft(caseId: string) {
+    const draftSummary = [...state.draftCases, ...state.pendingCases].find((caseSummary) => caseSummary.id === caseId);
+    if (!draftSummary) return;
+    if (!window.confirm(`Delete draft "${draftSummary.title}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await actions.deleteDraftCase(caseId);
+      if (state.selectedCaseId === caseId) {
+        dispatch({ type: 'CLEAR_CASE_CONTEXT' });
+      }
+      if (location.pathname !== '/') {
+        navigate('/');
+      }
+    } catch {
+      // useGameActions already surfaces the error banner
+    }
+  }
+
   useEffect(() => {
     if (!state.isAuthenticated && state.aliasDraft) {
       void actions.restoreSession();
@@ -440,6 +459,7 @@ function AppShell() {
             element={
               <HomeView
                 cases={state.cases}
+                draftCases={state.draftCases}
                 pendingCases={state.pendingCases}
                 role={state.sessionRole}
                 searchQuery={state.caseSearchQuery}
@@ -452,6 +472,7 @@ function AppShell() {
                   dispatch({ type: 'SET_SELECTED_CASE', payload: id });
                   navigate(`/${id}/authoring`);
                 }}
+                onDeleteDraft={handleDeleteDraft}
                 onOpenAuthoring={() => navigate('/authoring')}
               />
             }
@@ -466,6 +487,7 @@ function AppShell() {
                   dispatch({ type: 'SET_SELECTED_CASE', payload: id });
                   navigate(`/${id}/interrogation`);
                 }}
+                onDeleteCase={handleDeleteDraft}
                 onPlayableCasesChanged={actions.reloadPlayableCases}
               />
             }

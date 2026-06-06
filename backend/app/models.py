@@ -193,6 +193,7 @@ class SearchRequest(BaseModel):
 
 
 class SearchResult(BaseModel):
+    chunk_id: str
     document_id: str
     title: str
     folder: str
@@ -345,6 +346,7 @@ class CaseIngestionInput(BaseModel):
     difficulty: str = "medium"
     estimated_minutes: int = 45
     title_hint: str | None = None
+    focus_section: str | None = None
 
 
 class ParsedCaseBrief(BaseModel):
@@ -410,8 +412,11 @@ class SourceChunk(BaseModel):
 
 class SourceGrounding(BaseModel):
     generated_field: str
+    generated_value: str = ""
     supporting_chunk_ids: list[str] = Field(default_factory=list)
     preview: str
+    confidence: Literal["high", "medium", "fallback"] = "medium"
+    method: Literal["ollama", "heuristic"] = "heuristic"
 
 
 class CaseIngestionResponse(BaseModel):

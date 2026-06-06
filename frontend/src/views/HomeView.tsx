@@ -3,12 +3,14 @@ import { MediaPlate, PanelHeader } from '../ui';
 
 type Props = {
   cases: CaseSummary[];
+  draftCases: CaseSummary[];
   pendingCases: CaseSummary[];
   role: SessionRole;
   searchQuery: string;
   onSearchQueryChange: (value: string) => void;
   onSelectCase: (caseId: string) => void;
   onReviewCase: (caseId: string) => void;
+  onDeleteDraft: (caseId: string) => Promise<void>;
   onOpenAuthoring: () => void;
 };
 
@@ -22,15 +24,18 @@ function matchesCase(caseSummary: CaseSummary, searchQuery: string) {
 
 export default function HomeView({
   cases,
+  draftCases,
   pendingCases,
   role,
   searchQuery,
   onSearchQueryChange,
   onSelectCase,
   onReviewCase,
+  onDeleteDraft,
   onOpenAuthoring,
 }: Props) {
   const visibleCases = cases.filter((caseSummary) => matchesCase(caseSummary, searchQuery));
+  const visibleDrafts = draftCases.filter((caseSummary) => matchesCase(caseSummary, searchQuery));
   const visiblePending = pendingCases.filter((caseSummary) => matchesCase(caseSummary, searchQuery));
 
   return (
@@ -96,6 +101,51 @@ export default function HomeView({
         </div>
       </section>
 
+      <section className="intel-card">
+        <PanelHeader
+          eyebrow="My Drafts"
+          title="Private cases you are still building"
+          subtitle="Draft cases stay private until an admin approves them. Reopen them here to keep editing or test them privately."
+        />
+        <div className="case-library-grid">
+          {visibleDrafts.length ? (
+            visibleDrafts.map((caseSummary) => (
+              <article key={caseSummary.id} className="case-library-card pending-review-card">
+                <MediaPlate
+                  src={caseSummary.cover_image_url}
+                  alt={caseSummary.title}
+                  kind="cover"
+                  label={caseSummary.status}
+                />
+                <div className="case-library-copy">
+                  <div className="case-library-meta">
+                    <span className="card-chip">{caseSummary.id}</span>
+                    <span className="card-chip">{caseSummary.estimated_minutes} min</span>
+                  </div>
+                  <h3>{caseSummary.title}</h3>
+                  <p>{caseSummary.hook}</p>
+                </div>
+                <div className="case-library-actions">
+                  <button className="dossier-button dossier-button-accent" type="button" onClick={() => onReviewCase(caseSummary.id)}>
+                    Edit Draft
+                  </button>
+                  <button className="dossier-button dossier-button-ghost" type="button" onClick={() => onSelectCase(caseSummary.id)}>
+                    Play Draft
+                  </button>
+                  <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void onDeleteDraft(caseSummary.id)}>
+                    Delete Draft
+                  </button>
+                </div>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state">
+              No private drafts matched that search. Generate a case in the authoring studio and it will appear here.
+            </div>
+          )}
+        </div>
+      </section>
+
       {role === 'admin' ? (
         <section className="intel-card">
           <PanelHeader
@@ -127,6 +177,9 @@ export default function HomeView({
                     </button>
                     <button className="dossier-button dossier-button-ghost" type="button" onClick={() => onSelectCase(caseSummary.id)}>
                       Play Draft
+                    </button>
+                    <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void onDeleteDraft(caseSummary.id)}>
+                      Delete Draft
                     </button>
                   </div>
                 </article>

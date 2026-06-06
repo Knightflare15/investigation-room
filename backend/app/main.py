@@ -411,6 +411,21 @@ def approve_authoring_case(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.delete("/authoring/cases/{case_id}")
+def delete_authoring_case(
+    case_id: str,
+    game: Annotated[GameService, Depends(get_game_service)],
+    authoring: Annotated[AuthoringService, Depends(get_authoring_service)],
+    player: Annotated[SessionPrincipal, Depends(get_player)],
+):
+    try:
+        authoring.delete_case(case_id, player.alias)
+        game.reload_cases()
+        return {"deleted": True, "case_id": case_id}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/authoring/cases/{case_id}/assets")
 async def upload_authoring_asset(
     case_id: str,

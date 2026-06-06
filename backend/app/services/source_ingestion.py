@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+import logging
 import math
 import re
 from collections import Counter
+from urllib import error, request
+
+from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings
 from ..models import (
@@ -15,6 +20,7 @@ from ..models import (
 )
 from .retrieval import OllamaClient
 
+logger = logging.getLogger(__name__)
 
 STOPWORDS = {
     "about",
@@ -102,6 +108,36 @@ def _cosine(left: list[float] | None, right: list[float] | None) -> float:
     return numerator / (left_norm * right_norm)
 
 
+class _TitlePremiseExtraction(BaseModel):
+    title: str = ""
+    premise: str = ""
+
+
+class _VictimSettingExtraction(BaseModel):
+    victim: str = ""
+    setting: str = ""
+
+
+class _SuspectsExtraction(BaseModel):
+    suspects: list[ExtractedSuspectDraft] = Field(default_factory=list)
+
+
+class _RelationshipTimelineExtraction(BaseModel):
+    relationships: list[str] = Field(default_factory=list)
+    timeline: list[str] = Field(default_factory=list)
+
+
+class _EvidenceExtraction(BaseModel):
+    evidence: list[EvidenceDraft] = Field(default_factory=list)
+
+
+class _SolutionExtraction(BaseModel):
+    hidden_truth: list[str] = Field(default_factory=list)
+    culprit_name: str = ""
+    motive: str = ""
+    solution_summary: str = ""
+
+
 class SourceIngestionService:
     """Turn pasted creator source text into a grounded extracted draft.
 
@@ -111,6 +147,7 @@ class SourceIngestionService:
     """
 
     def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.ollama = OllamaClient(settings)
 
     def extract(self, payload: CaseIngestionInput) -> tuple[ExtractedCaseDraft, list[SourceGrounding]]:
@@ -120,42 +157,100 @@ class SourceIngestionService:
         chunks = self.chunk_source(source_text)
         if not chunks:
             raise ValueError("Source text is too short to ingest.")
+        chunk_vectors = {chunk.id: self.ollama.embed(chunk.text) for chunk in chunks}
 
         warnings: list[str] = []
         if len(source_text) < 700:
             warnings.append("Source text is thin; generated case may need manual strengthening in authoring.")
+        if payload.focus_section:
+            warnings.append(f"Focused regeneration ran for section: {payload.focus_section}.")
 
-        title_chunks = self.retrieve(chunks, payload.title_hint or "case title mystery name", limit=2)
-        premise_chunks = self.retrieve(chunks, "premise conflict death mystery incident", limit=3)
-        victim_chunks = self.retrieve(chunks, "victim dead killed found body", limit=3)
-        setting_chunks = self.retrieve(chunks, "setting location place room building scene", limit=3)
-        suspect_chunks = self.retrieve(chunks, "suspects persons involved motives secrets alibi", limit=6)
-        timeline_chunks = self.retrieve(chunks, "timeline time seen arrived left before after", limit=5)
-        evidence_chunks = self.retrieve(chunks, "evidence ledger message report note call receipt footage forensic", limit=6)
-        truth_chunks = self.retrieve(chunks, "hidden truth secret lie culprit motive killed", limit=5)
+        title_chunks = self.retrieve(chunks, payload.title_hint or "case title mystery name", limit=2, chunk_vectors=chunk_vectors)
+        premise_chunks = self.retrieve(chunks, "premise conflict death mystery incident", limit=3, chunk_vectors=chunk_vectors)
+        victim_chunks = self.retrieve(chunks, "victim dead killed found body", limit=3, chunk_vectors=chunk_vectors)
+        setting_chunks = self.retrieve(chunks, "setting location place room building scene", limit=3, chunk_vectors=chunk_vectors)
+        suspect_chunks = self.retrieve(chunks, "suspects persons involved motives secrets alibi", limit=6, chunk_vectors=chunk_vectors)
+        timeline_chunks = self.retrieve(chunks, "timeline time seen arrived left before after chronology", limit=5, chunk_vectors=chunk_vectors)
+        evidence_chunks = self.retrieve(chunks, "evidence ledger message report note call receipt footage forensic hidden door", limit=6, chunk_vectors=chunk_vectors)
+        truth_chunks = self.retrieve(chunks, "hidden truth secret lie culprit motive killed expose confrontation", limit=5, chunk_vectors=chunk_vectors)
 
-        title = self._extract_title(payload, title_chunks or chunks)
-        premise = self._extract_premise(premise_chunks or chunks)
-        victim = self._extract_victim(victim_chunks or chunks)
-        setting = self._extract_setting(setting_chunks or chunks)
-        suspects = self._extract_suspects(suspect_chunks or chunks, victim)
+        heuristic_title = self._extract_title(payload, title_chunks or chunks)
+        heuristic_premise = self._extract_premise(premise_chunks or chunks)
+        title_premise = self._extract_json(
+            _TitlePremiseExtraction,
+            title_chunks or premise_chunks or chunks[:2],
+            "Extract the case title and a short premise from these grounded source chunks.",
+        )
+        title = (title_premise.title.strip() if title_premise and title_premise.title.strip() else heuristic_title)
+        premise = (title_premise.premise.strip() if title_premise and title_premise.premise.strip() else heuristic_premise)
+
+        heuristic_victim = self._extract_victim(victim_chunks or chunks)
+        heuristic_setting = self._extract_setting(setting_chunks or chunks)
+        victim_setting = self._extract_json(
+            _VictimSettingExtraction,
+            victim_chunks + [chunk for chunk in setting_chunks if chunk not in victim_chunks],
+            "Extract the victim and the main setting from these grounded source chunks.",
+        )
+        victim = (victim_setting.victim.strip() if victim_setting and victim_setting.victim.strip() else heuristic_victim)
+        setting = (victim_setting.setting.strip() if victim_setting and victim_setting.setting.strip() else heuristic_setting)
+
+        heuristic_suspects = self._extract_suspects(suspect_chunks or chunks, victim)
+        suspect_extraction = self._extract_json(
+            _SuspectsExtraction,
+            suspect_chunks or chunks[:4],
+            "Extract the main suspects. Include role, public summary, hidden facts, secrets, personality traits, speaking style, verbal tells, outward goal, protective target, and protective reason when supported.",
+        )
+        suspects = suspect_extraction.suspects if suspect_extraction and suspect_extraction.suspects else heuristic_suspects
+        suspect_method = "ollama" if suspect_extraction and suspect_extraction.suspects else "heuristic"
         if len(suspects) < 2:
             suspects.extend(self._fallback_suspects(chunks, victim, len(suspects)))
             warnings.append("Fewer than two clear suspects were found; fallback suspects were added for playability.")
-        evidence = self._extract_evidence(evidence_chunks or chunks, payload.case_id)
+            suspect_method = "heuristic"
+
+        heuristic_evidence = self._extract_evidence(evidence_chunks or chunks, payload.case_id)
+        evidence_extraction = self._extract_json(
+            _EvidenceExtraction,
+            evidence_chunks or chunks[:4],
+            "Extract evidence items. Return compact titles, summaries, details, doc_type, folder, tags, and whether each item should stay hidden at first.",
+        )
+        evidence = evidence_extraction.evidence if evidence_extraction and evidence_extraction.evidence else heuristic_evidence
+        evidence_method = "ollama" if evidence_extraction and evidence_extraction.evidence else "heuristic"
         if not evidence:
             evidence = self._fallback_evidence(premise, setting, truth_chunks)
             warnings.append("No clear evidence objects were found; generated starter documents from source passages.")
-        timeline = self._extract_timeline(timeline_chunks or chunks)
-        relationships = self._extract_relationships(suspect_chunks or chunks, suspects)
-        hidden_truth = self._extract_hidden_truth(truth_chunks or chunks)
-        culprit_name, motive, solution_summary = self._extract_solution(truth_chunks or suspect_chunks or chunks, suspects)
+            evidence_method = "heuristic"
+
+        heuristic_timeline = self._extract_timeline(timeline_chunks or chunks)
+        heuristic_relationships = self._extract_relationships(suspect_chunks or chunks, suspects)
+        timeline_relationships = self._extract_json(
+            _RelationshipTimelineExtraction,
+            timeline_chunks + [chunk for chunk in suspect_chunks if chunk not in timeline_chunks],
+            "Extract the important timeline events and relationships for the case.",
+        )
+        relationships = timeline_relationships.relationships if timeline_relationships and timeline_relationships.relationships else heuristic_relationships
+        timeline = timeline_relationships.timeline if timeline_relationships and timeline_relationships.timeline else heuristic_timeline
+        relationship_method = "ollama" if timeline_relationships and (timeline_relationships.relationships or timeline_relationships.timeline) else "heuristic"
+
+        heuristic_hidden_truth = self._extract_hidden_truth(truth_chunks or chunks)
+        heuristic_culprit_name, heuristic_motive, heuristic_solution_summary = self._extract_solution(truth_chunks or suspect_chunks or chunks, suspects)
+        solution_extraction = self._extract_json(
+            _SolutionExtraction,
+            truth_chunks or suspect_chunks or chunks[:4],
+            "Extract hidden truths, culprit_name, motive, and a short solution summary grounded only in these chunks.",
+        )
+        hidden_truth = solution_extraction.hidden_truth if solution_extraction and solution_extraction.hidden_truth else heuristic_hidden_truth
+        culprit_name = solution_extraction.culprit_name.strip() if solution_extraction and solution_extraction.culprit_name.strip() else heuristic_culprit_name
+        motive = solution_extraction.motive.strip() if solution_extraction and solution_extraction.motive.strip() else heuristic_motive
+        solution_summary = solution_extraction.solution_summary.strip() if solution_extraction and solution_extraction.solution_summary.strip() else heuristic_solution_summary
+        solution_method = "ollama" if solution_extraction and any([solution_extraction.hidden_truth, solution_extraction.culprit_name, solution_extraction.motive, solution_extraction.solution_summary]) else "heuristic"
         if not culprit_name:
             culprit_name = suspects[0].name
             warnings.append("No explicit culprit was found; defaulted to the strongest suspect candidate.")
+            solution_method = "heuristic"
         if not motive:
             motive = f"{culprit_name} had something personal or professional to lose if the truth surfaced."
             warnings.append("No explicit motive was found; generated a conservative motive from the source.")
+            solution_method = "heuristic"
         contradictions = self._derive_contradictions(timeline, relationships, hidden_truth, evidence)
 
         extracted = ExtractedCaseDraft(
@@ -177,15 +272,29 @@ class SourceIngestionService:
         )
 
         groundings = [
-            self._grounding("title", title_chunks or chunks[:1]),
-            self._grounding("premise", premise_chunks),
-            self._grounding("victim", victim_chunks),
-            self._grounding("setting", setting_chunks),
-            self._grounding("suspects", suspect_chunks),
-            self._grounding("timeline", timeline_chunks),
-            self._grounding("evidence", evidence_chunks),
-            self._grounding("hidden_truth_solution", truth_chunks),
+            self._grounding("title", title, title_chunks or chunks[:1], self._confidence_for_method("ollama" if title_premise and title_premise.title.strip() else "heuristic"), "ollama" if title_premise and title_premise.title.strip() else "heuristic"),
+            self._grounding("premise", premise, premise_chunks or chunks[:2], self._confidence_for_method("ollama" if title_premise and title_premise.premise.strip() else "heuristic"), "ollama" if title_premise and title_premise.premise.strip() else "heuristic"),
+            self._grounding("victim", victim, victim_chunks or chunks[:2], self._confidence_for_method("ollama" if victim_setting and victim_setting.victim.strip() else "heuristic"), "ollama" if victim_setting and victim_setting.victim.strip() else "heuristic"),
+            self._grounding("setting", setting, setting_chunks or chunks[:2], self._confidence_for_method("ollama" if victim_setting and victim_setting.setting.strip() else "heuristic"), "ollama" if victim_setting and victim_setting.setting.strip() else "heuristic"),
         ]
+        groundings.extend(
+            self._item_groundings("suspect", [suspect.name for suspect in suspects], suspect_chunks or chunks[:4], suspect_method)
+        )
+        groundings.extend(
+            self._item_groundings("evidence", [item.title for item in evidence], evidence_chunks or chunks[:4], evidence_method)
+        )
+        groundings.extend(
+            self._item_groundings("timeline", timeline[:4], timeline_chunks or chunks[:4], relationship_method)
+        )
+        groundings.extend(
+            self._item_groundings("relationship", relationships[:4], suspect_chunks or chunks[:4], relationship_method)
+        )
+        groundings.extend(
+            self._item_groundings("hidden_truth", hidden_truth[:4], truth_chunks or chunks[:4], solution_method)
+        )
+        groundings.append(
+            self._grounding("solution", f"{culprit_name} | {motive}", truth_chunks or chunks[:2], self._confidence_for_method(solution_method), solution_method)
+        )
         return extracted, [grounding for grounding in groundings if grounding.supporting_chunk_ids]
 
     def chunk_source(self, source_text: str) -> list[SourceChunk]:
@@ -223,19 +332,33 @@ class SourceIngestionService:
         flush()
         return chunks
 
-    def retrieve(self, chunks: list[SourceChunk], query: str, limit: int = 4) -> list[SourceChunk]:
+    def retrieve(
+        self,
+        chunks: list[SourceChunk],
+        query: str,
+        limit: int = 4,
+        *,
+        chunk_vectors: dict[str, list[float] | None] | None = None,
+    ) -> list[SourceChunk]:
         query_tokens = set(_tokens(query))
         query_vector = self.ollama.embed(query)
-        scored: list[tuple[float, SourceChunk]] = []
+        lexical_scored: list[tuple[float, SourceChunk]] = []
         for chunk in chunks:
             text_tokens = set(_tokens(chunk.text))
             overlap = len(query_tokens & text_tokens)
             entity_bonus = sum(1 for entity in chunk.detected_entities if entity.lower() in query.lower()) * 1.5
             keyword_bonus = sum(1 for keyword in chunk.keywords if keyword in query.lower()) * 1.2
-            semantic = _cosine(query_vector, self.ollama.embed(chunk.text)) * 4.0 if query_vector else 0.0
-            score = overlap + entity_bonus + keyword_bonus + semantic
-            if score > 0:
-                scored.append((score, chunk))
+            score = overlap + entity_bonus + keyword_bonus
+            if score > 0 or query_vector is not None:
+                lexical_scored.append((score, chunk))
+        lexical_scored.sort(key=lambda item: item[0], reverse=True)
+        shortlisted = lexical_scored[: max(limit * 4, 8)] or [(0.0, chunk) for chunk in chunks[: max(limit * 2, 4)]]
+        scored: list[tuple[float, SourceChunk]] = []
+        for score, chunk in shortlisted:
+            semantic = _cosine(query_vector, (chunk_vectors or {}).get(chunk.id)) * 4.0 if query_vector else 0.0
+            total = score + semantic
+            if total > 0:
+                scored.append((total, chunk))
         scored.sort(key=lambda item: item[0], reverse=True)
         return [chunk for _, chunk in scored[:limit]] or chunks[:limit]
 
@@ -452,12 +575,97 @@ class SourceIngestionService:
     def _chunk_sentences(self, chunks: list[SourceChunk]) -> list[str]:
         return [sentence for chunk in chunks for sentence in _sentences(chunk.text)]
 
-    def _grounding(self, field: str, chunks: list[SourceChunk]) -> SourceGrounding:
+    def _confidence_for_method(self, method: str) -> str:
+        return "high" if method == "ollama" else "fallback"
+
+    def _extract_json(
+        self,
+        model_type: type[BaseModel],
+        chunks: list[SourceChunk],
+        instruction: str,
+    ) -> BaseModel | None:
+        if not chunks:
+            return None
+        payload = {
+            "model": self.settings.ollama_chat_model,
+            "stream": False,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Return strict JSON only. Do not add markdown fences, commentary, or extra text.",
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "instruction": instruction,
+                            "schema": model_type.model_json_schema(),
+                            "source_chunks": [
+                                {"id": chunk.id, "section_hint": chunk.section_hint, "text": chunk.text}
+                                for chunk in chunks[:6]
+                            ],
+                        },
+                        separators=(",", ":"),
+                    ),
+                },
+            ],
+        }
+        req = request.Request(
+            f"{self.settings.ollama_base_url}/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=self.settings.ollama_chat_timeout_seconds) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            content = body.get("message", {}).get("content", "").strip()
+            if not content:
+                return None
+            json_text = self._extract_json_object(content)
+            if not json_text:
+                return None
+            return model_type.model_validate_json(json_text)
+        except (error.URLError, TimeoutError, json.JSONDecodeError, ValidationError) as exc:
+            logger.warning("Source ingestion Ollama extraction failed; using heuristic fallback: %s", exc)
+            return None
+
+    def _extract_json_object(self, content: str) -> str | None:
+        stripped = content.strip()
+        if stripped.startswith("```"):
+            stripped = re.sub(r"^```(?:json)?\s*|\s*```$", "", stripped, flags=re.IGNORECASE | re.DOTALL).strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            return stripped
+        match = re.search(r"(\{.*\}|\[.*\])", stripped, re.DOTALL)
+        return match.group(1) if match else None
+
+    def _item_groundings(
+        self,
+        prefix: str,
+        values: list[str],
+        chunks: list[SourceChunk],
+        method: str,
+    ) -> list[SourceGrounding]:
+        return [
+            self._grounding(f"{prefix}_{index + 1}", value, self._supporting_chunks_for_value(chunks, value), self._confidence_for_method(method), method)
+            for index, value in enumerate(values)
+            if value.strip()
+        ]
+
+    def _supporting_chunks_for_value(self, chunks: list[SourceChunk], value: str) -> list[SourceChunk]:
+        lowered = value.lower()
+        matched = [chunk for chunk in chunks if lowered and lowered[:48] in chunk.text.lower()]
+        return matched or chunks[:2]
+
+    def _grounding(self, field: str, value: str, chunks: list[SourceChunk], confidence: str, method: str) -> SourceGrounding:
         preview = " ".join(chunk.text[:140] for chunk in chunks[:2]).strip()
         return SourceGrounding(
             generated_field=field,
+            generated_value=value[:180],
             supporting_chunk_ids=[chunk.id for chunk in chunks[:4]],
             preview=preview[:300],
+            confidence=confidence,
+            method=method,
         )
 
     def _infer_role(self, name: str, related: list[str]) -> str:

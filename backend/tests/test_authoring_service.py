@@ -117,6 +117,53 @@ class AuthoringServiceTests(unittest.TestCase):
             self.assertTrue(any(item.path == "suspects/photo.svg" for item in reloaded.assets))
             self.assertTrue(any(item.path == "suspects/template-suspect.svg" for item in reloaded.assets))
 
+    def test_blank_case_ids_auto_generate_unique_draft_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = AuthoringService(Path(temp_dir))
+            object.__setattr__(service.source_ingestion.ollama.settings, "ollama_base_url", "http://127.0.0.1:1")
+
+            scaffold_one = service.create_case(
+                CreateCaseRequest(
+                    id="",
+                    title="Glass Harbor Affair",
+                    hook="Auto ID test.",
+                    difficulty="easy",
+                    estimated_minutes=30,
+                ),
+                "Aryan",
+            )
+            scaffold_two = service.create_case(
+                CreateCaseRequest(
+                    id="",
+                    title="Glass Harbor Affair",
+                    hook="Auto ID test.",
+                    difficulty="easy",
+                    estimated_minutes=30,
+                ),
+                "Aryan",
+            )
+
+            self.assertEqual(scaffold_one.case.id, "draft-glass-harbor-affair")
+            self.assertEqual(scaffold_two.case.id, "draft-glass-harbor-affair-2")
+
+            generated = service.generate_case_from_brief(
+                CaseBriefInput(case_id="", brief=BRIEF, difficulty="medium", estimated_minutes=45),
+                "Aryan",
+            )
+            self.assertEqual(generated.bundle.case.id, "draft-the-lantern-street-file")
+
+            generated_again = service.generate_case_from_brief(
+                CaseBriefInput(case_id="", brief=BRIEF, difficulty="medium", estimated_minutes=45),
+                "Aryan",
+            )
+            self.assertEqual(generated_again.bundle.case.id, "draft-the-lantern-street-file-2")
+
+            ingested = service.ingest_case_from_source(
+                CaseIngestionInput(case_id="", source_text=SOURCE_PACKET, difficulty="medium", estimated_minutes=45),
+                "Aryan",
+            )
+            self.assertEqual(ingested.bundle.case.id, "draft-the-glass-harbor-affair")
+
     def test_generate_case_from_brief_returns_draft_bundle_with_templates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = AuthoringService(Path(temp_dir))
@@ -134,6 +181,7 @@ class AuthoringServiceTests(unittest.TestCase):
     def test_ingest_case_from_source_returns_grounded_draft_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = AuthoringService(Path(temp_dir))
+            object.__setattr__(service.source_ingestion.ollama.settings, "ollama_base_url", "http://127.0.0.1:1")
             response = service.ingest_case_from_source(
                 CaseIngestionInput(case_id="case-source", source_text=SOURCE_PACKET, difficulty="medium", estimated_minutes=45),
                 "Aryan",
@@ -145,6 +193,26 @@ class AuthoringServiceTests(unittest.TestCase):
             self.assertTrue(response.bundle.documents)
             self.assertTrue(response.groundings)
             self.assertTrue(any(grounding.supporting_chunk_ids for grounding in response.groundings))
+            self.assertTrue(any(grounding.method == "heuristic" for grounding in response.groundings))
+            self.assertTrue(all(grounding.confidence in {"high", "medium", "fallback"} for grounding in response.groundings))
+            self.assertTrue(any(grounding.generated_value for grounding in response.groundings))
+
+    def test_ingest_case_from_source_accepts_focus_section_for_targeted_regeneration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = AuthoringService(Path(temp_dir))
+            object.__setattr__(service.source_ingestion.ollama.settings, "ollama_base_url", "http://127.0.0.1:1")
+            response = service.ingest_case_from_source(
+                CaseIngestionInput(
+                    case_id="case-source-focus",
+                    source_text=SOURCE_PACKET,
+                    difficulty="medium",
+                    estimated_minutes=45,
+                    focus_section="suspects",
+                ),
+                "Aryan",
+            )
+            self.assertTrue(any("Focused regeneration ran for section: suspects." == warning for warning in response.warnings))
+            self.assertTrue(response.groundings)
 
     def test_ingest_case_from_source_rejects_empty_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -166,6 +234,31 @@ class AuthoringServiceTests(unittest.TestCase):
                 service.approve_case("case-brief", "Aryan")
             approved = service.approve_case("case-brief", "Consultant")
             self.assertEqual(approved.case.status, "approved")
+
+    def test_owner_and_admin_can_delete_draft_but_not_approved_case(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = AuthoringService(Path(temp_dir))
+            service.generate_case_from_brief(
+                CaseBriefInput(case_id="case-delete", brief=BRIEF, difficulty="medium", estimated_minutes=45),
+                "Aryan",
+            )
+            service.delete_case("case-delete", "Aryan")
+            self.assertFalse((Path(temp_dir) / "case-delete").exists())
+
+            service.generate_case_from_brief(
+                CaseBriefInput(case_id="case-admin-delete", brief=BRIEF, difficulty="medium", estimated_minutes=45),
+                "Aryan",
+            )
+            service.delete_case("case-admin-delete", "Consultant")
+            self.assertFalse((Path(temp_dir) / "case-admin-delete").exists())
+
+            service.generate_case_from_brief(
+                CaseBriefInput(case_id="case-approved", brief=BRIEF, difficulty="medium", estimated_minutes=45),
+                "Aryan",
+            )
+            service.approve_case("case-approved", "Consultant")
+            with self.assertRaises(ValueError):
+                service.delete_case("case-approved", "Consultant")
 
 
 if __name__ == "__main__":

@@ -480,6 +480,7 @@ It supports:
 - rewriting prompt text files
 - saving uploaded assets into case folders
 - assigning template images for generated cases
+- auto-generating unique draft case IDs from the case title when the author leaves the ID blank
 - approving draft cases when the current user is an admin
 
 Suspects can also carry authored voice information such as:
@@ -683,12 +684,13 @@ This is one of the strongest "systems design" features in the repo.
 
 1. a creator or admin opens the authoring studio
 2. they either scaffold a blank case or paste a semi-structured case brief
-3. the backend parses the brief, extracts structure, and generates a draft case bundle
-4. the generated case starts as `draft`
-5. template suspect/evidence/location images are assigned automatically
-6. the draft can be edited and tested privately
-7. an admin reviews and approves it
-8. the case becomes publicly visible in the home screen
+3. if they leave the case ID blank, the backend generates a unique draft ID automatically from the title
+4. the backend parses the brief, extracts structure, and generates a draft case bundle
+5. the generated case starts as `draft`
+6. template suspect/evidence/location images are assigned automatically
+7. the draft can be edited and tested privately
+8. an admin reviews and approves it
+9. the case becomes publicly visible in the home screen
 
 ## 10. How search works in plain language
 

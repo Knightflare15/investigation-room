@@ -340,6 +340,11 @@ export const api = {
     });
     return normalizeAuthoringBundle(bundle);
   },
+  deleteAuthoringCase(caseId: string, alias: string) {
+    return request<{ deleted: boolean; case_id: string }>(`/authoring/cases/${caseId}`, alias, {
+      method: 'DELETE',
+    });
+  },
   async uploadAuthoringAsset(caseId: string, alias: string, folder: string, file: File) {
     const formData = new FormData();
     formData.append('folder', folder);

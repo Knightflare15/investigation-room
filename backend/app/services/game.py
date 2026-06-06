@@ -295,18 +295,33 @@ class GameService:
         """Retrieve supporting archive passages for an interrogation turn."""
         state = self.get_or_create_state(case_id, player_alias)
         case = self.get_case(case_id)
-        self._resolve_suspect(case, state, suspect_id)
+        suspect = self._resolve_suspect(case, state, suspect_id)
+        conversation = self._get_conversation(case_id, player_alias, suspect_id)
         evidence = case.documents.get(evidence_id) if evidence_id else None
-        query_parts = [message]
+        pinned_documents = [case.documents[doc_id] for doc_id in state.pinned_evidence_ids if doc_id in case.documents]
+        location_terms = [
+            location.label
+            for location in case.config.location_dossiers
+            if any(location.label.lower() in context.lower() for context in state.discovered_contexts[-6:])
+        ]
+        query_parts = [message, suspect.display_name, suspect.public_profile.role, conversation.memory_summary]
         if evidence is not None:
             query_parts.append(evidence.title)
             query_parts.extend(evidence.entity_tags[:3])
+        for document in pinned_documents[:2]:
+            query_parts.append(document.title)
+            query_parts.extend(document.entity_tags[:2])
+        query_parts.extend(location_terms[:2])
         return self.retrieval.retrieve_dialogue_context(
             case,
             state.unlocked_document_ids,
             " ".join(part for part in query_parts if part).strip(),
             evidence=evidence,
-            limit=3,
+            suspect=suspect,
+            memory_summary=conversation.memory_summary,
+            discovered_contexts=state.discovered_contexts,
+            preferred_document_ids={document.id for document in pinned_documents},
+            limit=4,
         )
 
     def begin_interrogation_session(self, case_id: str, player_alias: str, suspect_id: str) -> ConversationState:

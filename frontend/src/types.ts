@@ -140,6 +140,7 @@ export type SaveStateResponse = {
 };
 
 export type SearchResult = {
+  chunk_id: string;
   document_id: string;
   title: string;
   folder: string;
@@ -309,12 +310,16 @@ export type CaseIngestionInput = {
   difficulty: string;
   estimated_minutes: number;
   title_hint?: string | null;
+  focus_section?: string | null;
 };
 
 export type SourceGrounding = {
   generated_field: string;
+  generated_value: string;
   supporting_chunk_ids: string[];
   preview: string;
+  confidence: 'high' | 'medium' | 'fallback';
+  method: 'ollama' | 'heuristic';
 };
 
 export type GenerateCaseDraftResponse = {

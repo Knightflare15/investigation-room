@@ -20,6 +20,7 @@ type Props = {
   currentCaseId: string;
   onPlayableCasesChanged: (caseId?: string) => Promise<void> | void;
   onSelectCase: (caseId: string) => void;
+  onDeleteCase?: (caseId: string) => Promise<void>;
 };
 
 const emptyCreateForm: CreateCaseRequest = {
@@ -128,7 +129,60 @@ const emptySourceForm: CaseIngestionInput = {
   difficulty: 'medium',
   estimated_minutes: 45,
   title_hint: '',
+  focus_section: null,
 };
+
+const sourceRefinementSections = ['all', 'suspects', 'evidence', 'locations'] as const;
+
+function mergeFocusedSourceBundle(
+  current: AuthoringBundle,
+  incoming: AuthoringBundle,
+  focusSection: (typeof sourceRefinementSections)[number],
+): AuthoringBundle {
+  if (focusSection === 'all') return incoming;
+  if (focusSection === 'suspects') {
+    return {
+      ...current,
+      suspects: incoming.suspects,
+      prompts: incoming.prompts,
+      case: {
+        ...current.case,
+        start_state: {
+          ...current.case.start_state,
+          initial_suspect_ids: incoming.case.start_state.initial_suspect_ids,
+        },
+      },
+    };
+  }
+  if (focusSection === 'evidence') {
+    return {
+      ...current,
+      documents: incoming.documents,
+      prompts: incoming.prompts,
+      case: {
+        ...current.case,
+        start_state: {
+          ...current.case.start_state,
+          initial_document_ids: incoming.case.start_state.initial_document_ids,
+        },
+      },
+    };
+  }
+  if (focusSection === 'locations') {
+    return {
+      ...current,
+      prompts: incoming.prompts,
+      case: {
+        ...current.case,
+        archive_domains: incoming.case.archive_domains,
+        location_dossiers: incoming.case.location_dossiers,
+        cover_image_path: incoming.case.cover_image_path,
+        cover_image_url: incoming.case.cover_image_url,
+      },
+    };
+  }
+  return incoming;
+}
 
 const briefHeadings = [
   'Case Title',
@@ -206,7 +260,7 @@ function toOptions(assets: AssetEntry[], kind: string) {
   return assets.filter((asset) => asset.kind === kind);
 }
 
-function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelectCase }: Props) {
+function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelectCase, onDeleteCase }: Props) {
   const [bundles, setBundles] = useState<AuthoringBundle[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState(currentCaseId);
   const [draft, setDraft] = useState<AuthoringBundle | null>(null);
@@ -224,6 +278,7 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
   const [reviewPrompt, setReviewPrompt] = useState('');
   const [reviewRegenerating, setReviewRegenerating] = useState(false);
   const [lastGeneratedMode, setLastGeneratedMode] = useState<'brief' | 'source' | null>(null);
+  const [reviewFocusSection, setReviewFocusSection] = useState<(typeof sourceRefinementSections)[number]>('all');
 
   useEffect(() => {
     void loadAuthoringCases();
@@ -312,7 +367,6 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
       setStatus(`Created case ${created.case.title}.`);
       await loadAuthoringCases();
       setSelectedCaseId(created.case.id);
-      onSelectCase(created.case.id);
       await onPlayableCasesChanged(created.case.id);
       setCreateForm(emptyCreateForm);
     } catch (error) {
@@ -333,7 +387,6 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
       setStatus(`Generated draft case ${generated.bundle.case.title}.`);
       await loadAuthoringCases();
       setSelectedCaseId(generated.bundle.case.id);
-      onSelectCase(generated.bundle.case.id);
       await onPlayableCasesChanged(generated.bundle.case.id);
     } catch (error) {
       setStatus((error as Error).message);
@@ -348,12 +401,12 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
       setGenerationWarnings(generated.warnings);
       setSourceGroundings(generated.groundings);
       setLastGeneratedMode('source');
+      setReviewFocusSection('all');
       setReviewPrompt('');
       setReviewModalOpen(true);
       setStatus(`Ingested draft case ${generated.bundle.case.title}.`);
       await loadAuthoringCases();
       setSelectedCaseId(generated.bundle.case.id);
-      onSelectCase(generated.bundle.case.id);
       await onPlayableCasesChanged(generated.bundle.case.id);
     } catch (error) {
       setStatus((error as Error).message);
@@ -369,7 +422,6 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
       setGenerationWarnings([]);
       setStatus(notice.replace('{title}', saved.case.title));
       await loadAuthoringCases();
-      onSelectCase(saved.case.id);
       await onPlayableCasesChanged(saved.case.id);
       return saved;
     } catch (error) {
@@ -444,10 +496,16 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
         setSourceGroundings([]);
       } else {
         const mergedSource = `${sourceForm.source_text.trim()}\n\nRefinement Notes\n${reviewPrompt.trim()}`;
-        const nextSourceForm = { ...sourceForm, source_text: mergedSource };
+        const nextSourceForm = {
+          ...sourceForm,
+          source_text: mergedSource,
+          focus_section: reviewFocusSection === 'all' ? null : reviewFocusSection,
+        };
         const generated = await api.ingestAuthoringCase(alias, nextSourceForm);
         setSourceForm(nextSourceForm);
-        setDraft(generated.bundle);
+        setDraft((current) =>
+          current ? mergeFocusedSourceBundle(current, generated.bundle, reviewFocusSection) : generated.bundle,
+        );
         setGenerationWarnings(generated.warnings);
         setSourceGroundings(generated.groundings);
       }
@@ -472,6 +530,19 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
     }
   }
 
+  async function handleDeleteCurrentDraft() {
+    if (!draft || draft.case.status !== 'draft' || !onDeleteCase) return;
+    try {
+      await onDeleteCase(draft.case.id);
+      setDraft(null);
+      setSelectedCaseId('');
+      setReviewModalOpen(false);
+      setStatus(`Deleted draft ${draft.case.title}.`);
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+  }
+
   return (
     <section className="dossier-surface authoring-surface">
       <PanelHeader
@@ -483,6 +554,11 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
             {lastGeneratedMode && draft ? (
               <button className="dossier-button dossier-button-ghost" type="button" onClick={() => setReviewModalOpen(true)}>
                 Review Extraction
+              </button>
+            ) : null}
+            {draft?.case.status === 'draft' && onDeleteCase ? (
+              <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void handleDeleteCurrentDraft()}>
+                Delete Draft
               </button>
             ) : null}
             {status ? <div className="status-chip">{status}</div> : null}
@@ -497,8 +573,12 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
             <strong>Scaffold</strong>
           </div>
           <label>
-            Case ID
-            <input value={createForm.id} onChange={(event) => setCreateForm({ ...createForm, id: event.target.value })} />
+            Case ID (Optional)
+            <input
+              value={createForm.id}
+              onChange={(event) => setCreateForm({ ...createForm, id: event.target.value })}
+              placeholder="Auto-generate a unique draft ID"
+            />
           </label>
           <label>
             Title
@@ -529,8 +609,12 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
           {importMode === 'brief' ? (
             <>
               <label>
-                Draft Case ID
-                <input value={briefForm.case_id} onChange={(event) => setBriefForm({ ...briefForm, case_id: event.target.value })} />
+                Draft Case ID (Optional)
+                <input
+                  value={briefForm.case_id}
+                  onChange={(event) => setBriefForm({ ...briefForm, case_id: event.target.value })}
+                  placeholder="Leave blank to auto-generate"
+                />
               </label>
               <label>
                 Case Brief
@@ -544,8 +628,12 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
           ) : (
             <>
               <label>
-                Draft Case ID
-                <input value={sourceForm.case_id} onChange={(event) => setSourceForm({ ...sourceForm, case_id: event.target.value })} />
+                Draft Case ID (Optional)
+                <input
+                  value={sourceForm.case_id}
+                  onChange={(event) => setSourceForm({ ...sourceForm, case_id: event.target.value })}
+                  placeholder="Leave blank to auto-generate"
+                />
               </label>
               <label>
                 Optional Title Hint
@@ -1056,8 +1144,9 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
                 {sourceGroundings.map((grounding) => (
                   <div key={grounding.generated_field} className="intel-row">
                     <strong>{grounding.generated_field.replace(/_/g, ' ')}</strong>
+                    <span>{grounding.method} / {grounding.confidence}</span>
                     <span>{grounding.supporting_chunk_ids.join(', ')}</span>
-                    <span>{grounding.preview}</span>
+                    <span>{grounding.generated_value || grounding.preview}</span>
                   </div>
                 ))}
               </div>
@@ -1085,7 +1174,7 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
               </button>
             </div>
             <div className="review-modal-body">
-              <section className="intel-card">
+              <section className="intel-card review-visual-assignment">
                 <div className="intel-card-header">
                   <span>Detected Structure</span>
                   <strong>{draft.case.status}</strong>
@@ -1123,8 +1212,9 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
                     {sourceGroundings.slice(0, 6).map((grounding) => (
                       <div key={grounding.generated_field} className="intel-row">
                         <strong>{grounding.generated_field.replace(/_/g, ' ')}</strong>
+                        <span>{grounding.method} / {grounding.confidence}</span>
                         <span>{grounding.supporting_chunk_ids.join(', ')}</span>
-                        <span>{grounding.preview}</span>
+                        <span>{grounding.generated_value || grounding.preview}</span>
                       </div>
                     ))}
                   </div>
@@ -1155,6 +1245,20 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
                     Use this when the auto-detected suspects, evidence, or locations are incomplete. We will regenerate the same draft using your follow-up note and keep the case private.
                   </span>
                 </div>
+                {lastGeneratedMode === 'source' ? (
+                  <label>
+                    Regenerate Section
+                    <select
+                      value={reviewFocusSection}
+                      onChange={(event) => setReviewFocusSection(event.target.value as (typeof sourceRefinementSections)[number])}
+                    >
+                      <option value="all">All extracted sections</option>
+                      <option value="suspects">Suspects only</option>
+                      <option value="evidence">Evidence only</option>
+                      <option value="locations">Locations only</option>
+                    </select>
+                  </label>
+                ) : null}
                 <button
                   className="dossier-button dossier-button-accent"
                   type="button"
@@ -1165,77 +1269,79 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
                 </button>
               </section>
 
-              <section className="intel-card">
+              <section className="intel-card review-visual-assignment">
                 <div className="intel-card-header">
                   <span>Quick Visual Assignment</span>
                   <strong>{draft.assets.length.toString().padStart(2, '0')}</strong>
                 </div>
-                <div className="review-asset-upload-row">
-                  <label className="dossier-button dossier-button-ghost">
-                    Upload Suspect Image
-                    <input type="file" accept="image/*,.svg" hidden onChange={(event) => void handleReviewUpload('suspects', event)} />
-                  </label>
-                  <label className="dossier-button dossier-button-ghost">
-                    Upload Evidence Image
-                    <input type="file" accept="image/*,.svg" hidden onChange={(event) => void handleReviewUpload('evidence', event)} />
-                  </label>
-                  <label className="dossier-button dossier-button-ghost">
-                    Upload Location Image
-                    <input type="file" accept="image/*,.svg" hidden onChange={(event) => void handleReviewUpload('locations', event)} />
-                  </label>
-                </div>
-                <div className="authoring-grid">
-                  {draft.suspects.map((suspect, index) => (
-                    <div key={`review-suspect-${suspect.id}`} className="editor-card">
-                      <MediaPlate src={suspect.image_url} alt={suspect.display_name} kind="suspect" label={suspect.portrait_key ?? suspect.display_name.slice(0, 2)} />
-                      <strong>{suspect.display_name}</strong>
-                      <select
-                        value={suspect.image_path ?? ''}
-                        onChange={(event) => updateSuspects((suspects) => { suspects[index].image_path = event.target.value || null; })}
-                      >
-                        <option value="">Default / None</option>
-                        {suspectAssets.map((asset) => (
-                          <option key={asset.path} value={asset.path}>
-                            {asset.path}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ))}
-                  {draft.documents.slice(0, 6).map((document, index) => (
-                    <div key={`review-document-${document.id}`} className="editor-card">
-                      <MediaPlate src={document.image_url} alt={document.title} kind="evidence" label={document.id.toUpperCase()} />
-                      <strong>{document.title}</strong>
-                      <select
-                        value={document.image_path ?? ''}
-                        onChange={(event) => updateDocuments((documents) => { documents[index].image_path = event.target.value || null; })}
-                      >
-                        <option value="">Default / None</option>
-                        {evidenceAssets.concat(locationAssets).map((asset) => (
-                          <option key={asset.path} value={asset.path}>
-                            {asset.path}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ))}
-                  {draft.case.location_dossiers.map((location, index) => (
-                    <div key={`review-location-${location.id}`} className="editor-card">
-                      <MediaPlate src={location.image_url} alt={location.label} kind="location" label="Location" />
-                      <strong>{location.label}</strong>
-                      <select
-                        value={location.image_path ?? ''}
-                        onChange={(event) => updateLocations((locations) => { locations[index].image_path = event.target.value || null; })}
-                      >
-                        <option value="">Default / None</option>
-                        {locationAssets.map((asset) => (
-                          <option key={asset.path} value={asset.path}>
-                            {asset.path}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ))}
+                <div className="review-visual-scroll">
+                  <div className="review-asset-upload-row">
+                    <label className="dossier-button dossier-button-ghost">
+                      Upload Suspect Image
+                      <input type="file" accept="image/*,.svg" hidden onChange={(event) => void handleReviewUpload('suspects', event)} />
+                    </label>
+                    <label className="dossier-button dossier-button-ghost">
+                      Upload Evidence Image
+                      <input type="file" accept="image/*,.svg" hidden onChange={(event) => void handleReviewUpload('evidence', event)} />
+                    </label>
+                    <label className="dossier-button dossier-button-ghost">
+                      Upload Location Image
+                      <input type="file" accept="image/*,.svg" hidden onChange={(event) => void handleReviewUpload('locations', event)} />
+                    </label>
+                  </div>
+                  <div className="authoring-grid">
+                    {draft.suspects.map((suspect, index) => (
+                      <div key={`review-suspect-${suspect.id}`} className="editor-card">
+                        <MediaPlate src={suspect.image_url} alt={suspect.display_name} kind="suspect" label={suspect.portrait_key ?? suspect.display_name.slice(0, 2)} />
+                        <strong>{suspect.display_name}</strong>
+                        <select
+                          value={suspect.image_path ?? ''}
+                          onChange={(event) => updateSuspects((suspects) => { suspects[index].image_path = event.target.value || null; })}
+                        >
+                          <option value="">Default / None</option>
+                          {suspectAssets.map((asset) => (
+                            <option key={asset.path} value={asset.path}>
+                              {asset.path}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                    {draft.documents.slice(0, 6).map((document, index) => (
+                      <div key={`review-document-${document.id}`} className="editor-card">
+                        <MediaPlate src={document.image_url} alt={document.title} kind="evidence" label={document.id.toUpperCase()} />
+                        <strong>{document.title}</strong>
+                        <select
+                          value={document.image_path ?? ''}
+                          onChange={(event) => updateDocuments((documents) => { documents[index].image_path = event.target.value || null; })}
+                        >
+                          <option value="">Default / None</option>
+                          {evidenceAssets.concat(locationAssets).map((asset) => (
+                            <option key={asset.path} value={asset.path}>
+                              {asset.path}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                    {draft.case.location_dossiers.map((location, index) => (
+                      <div key={`review-location-${location.id}`} className="editor-card">
+                        <MediaPlate src={location.image_url} alt={location.label} kind="location" label="Location" />
+                        <strong>{location.label}</strong>
+                        <select
+                          value={location.image_path ?? ''}
+                          onChange={(event) => updateLocations((locations) => { locations[index].image_path = event.target.value || null; })}
+                        >
+                          <option value="">Default / None</option>
+                          {locationAssets.map((asset) => (
+                            <option key={asset.path} value={asset.path}>
+                              {asset.path}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </section>
 

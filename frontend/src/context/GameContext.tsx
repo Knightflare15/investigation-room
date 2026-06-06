@@ -25,6 +25,7 @@ export type GameState = {
   aliasDraft: string;
   sessionRole: SessionRole;
   cases: CaseSummary[];
+  draftCases: CaseSummary[];
   pendingCases: CaseSummary[];
   caseSearchQuery: string;
   selectedCaseId: string;
@@ -61,11 +62,13 @@ export type GameAction =
   | { type: 'LOG_OUT' }
   | { type: 'SET_SESSION_ROLE'; payload: SessionRole }
   | { type: 'SET_VIEW'; payload: ViewMode }
+  | { type: 'CLEAR_CASE_CONTEXT' }
   | { type: 'SET_SELECTED_CASE'; payload: string }
   | { type: 'SET_SELECTED_SUSPECT'; payload: string }
   | { type: 'SET_SELECTED_DOCUMENT'; payload: string }
   | { type: 'SET_SELECTED_LOCATION'; payload: string }
   | { type: 'SET_CASES'; payload: CaseSummary[] }
+  | { type: 'SET_DRAFT_CASES'; payload: CaseSummary[] }
   | { type: 'SET_PENDING_CASES'; payload: CaseSummary[] }
   | { type: 'SET_CASE_SEARCH_QUERY'; payload: string }
   | { type: 'SET_CASE_DETAIL'; payload: CaseDetailResponse }
@@ -94,6 +97,7 @@ const initialState: GameState = {
   aliasDraft: savedAlias,
   sessionRole: 'player',
   cases: [],
+  draftCases: [],
   pendingCases: [],
   caseSearchQuery: '',
   selectedCaseId: '',
@@ -148,6 +152,31 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...state, sessionRole: action.payload };
     case 'SET_VIEW':
       return { ...state, selectedView: action.payload };
+    case 'CLEAR_CASE_CONTEXT':
+      return {
+        ...state,
+        selectedCaseId: '',
+        caseDetail: null,
+        saveState: null,
+        conversations: {},
+        selectedSuspectId: '',
+        selectedDocumentId: '',
+        selectedLocationId: '',
+        searchQuery: '',
+        searchResults: [],
+        lastGroundingResults: [],
+        leadMessages: [],
+        rescanResults: null,
+        communityStats: null,
+        unlockedSuspects: [],
+        pinnedDocuments: [],
+        boardNodes: [],
+        folderCounts: [],
+        contradictionItems: [],
+        clueCards: [],
+        followUpPrompts: [],
+        suspicionValue: 0,
+      };
     case 'SET_SELECTED_CASE':
       return {
         ...state,
@@ -165,6 +194,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...state, selectedLocationId: action.payload };
     case 'SET_CASES':
       return { ...state, cases: action.payload };
+    case 'SET_DRAFT_CASES':
+      return { ...state, draftCases: action.payload };
     case 'SET_PENDING_CASES':
       return { ...state, pendingCases: action.payload };
     case 'SET_CASE_SEARCH_QUERY':

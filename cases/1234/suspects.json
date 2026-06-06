@@ -1,0 +1,110 @@
+{
+  "suspects": [
+    {
+      "id": "sus_clara-whitmore",
+      "display_name": "Clara Whitmore",
+      "unlock_rule": null,
+      "public_profile": {
+        "role": "Museum curator",
+        "summary": "Elegant and knowledgeable, responsible for authenticating the clocktower artifacts."
+      },
+      "personality_profile": {
+        "traits": [
+          "composed",
+          "proud"
+        ],
+        "speaking_style": "Formal and careful.",
+        "catchphrase": "History remembers details.",
+        "verbal_tells": [
+          "Corrects small facts when under pressure."
+        ],
+        "outward_goal": "Protect the museum\u2019s reputation.",
+        "protective_target": "the artifact collection",
+        "protective_reason": "A forgery scandal would end her career and ruin the heritage project."
+      },
+      "private_truth": {
+        "facts_known": [
+          "She discovered one artifact in the restoration exhibit was a forgery."
+        ],
+        "secrets": [
+          "She replaced an inspection tag before the police arrived."
+        ],
+        "non_negotiables": [
+          "Clara Whitmore must stay consistent with the authored solution."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "controlled and careful",
+        "lie_strategy": "deflect until the evidence becomes too specific",
+        "pressure_triggers": [
+          "the artifact collection",
+          "Museum curator",
+          "composed",
+          "proud",
+          "Restoration Inventory Sheet"
+        ],
+        "shut_down_threshold": 80
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      },
+      "portrait_key": "CW",
+      "image_path": "suspects/board.png"
+    },
+    {
+      "id": "sus_marcus-hale",
+      "display_name": "Marcus Hale",
+      "unlock_rule": null,
+      "public_profile": {
+        "role": "Event security chief",
+        "summary": "Stern and practical, hired to manage the gala\u2019s private security."
+      },
+      "personality_profile": {
+        "traits": [
+          "guarded",
+          "disciplined"
+        ],
+        "speaking_style": "Blunt and controlled.",
+        "catchphrase": "Doors do not open themselves.",
+        "verbal_tells": [
+          "Avoids naming people directly."
+        ],
+        "outward_goal": "Keep the event failure from becoming his responsibility.",
+        "protective_target": "the stairwell access log",
+        "protective_reason": "If exposed, it proves he broke protocol during the critical window."
+      },
+      "private_truth": {
+        "facts_known": [
+          "He allowed someone into the locked maintenance stairwell before midnight."
+        ],
+        "secrets": [
+          "He erased one entry from the security access log."
+        ],
+        "non_negotiables": [
+          "Marcus Hale must stay consistent with the authored solution."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "controlled and careful",
+        "lie_strategy": "deflect until the evidence becomes too specific",
+        "pressure_triggers": [
+          "the stairwell access log",
+          "Event security chief",
+          "guarded",
+          "disciplined",
+          "Restoration Inventory Sheet"
+        ],
+        "shut_down_threshold": 75
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      },
+      "portrait_key": "MH",
+      "image_path": "suspects/template-suspect.svg"
+    }
+  ]
+}

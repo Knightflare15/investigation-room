@@ -77,6 +77,15 @@ class OllamaClient:
 class RetrievalService:
     def __init__(self, settings: Settings) -> None:
         self.ollama = OllamaClient(settings)
+        self._chunk_embedding_cache: dict[str, list[float] | None] = {}
+
+    def _compute_chunk_embedding(self, chunk: ChunkRecord) -> list[float] | None:
+        return self.ollama.embed(chunk.text)
+
+    def _get_chunk_embedding(self, chunk: ChunkRecord) -> list[float] | None:
+        if chunk.chunk_id not in self._chunk_embedding_cache:
+            self._chunk_embedding_cache[chunk.chunk_id] = self._compute_chunk_embedding(chunk)
+        return self._chunk_embedding_cache[chunk.chunk_id]
 
     def build_chunks(self, documents: list[CaseDocument]) -> list[ChunkRecord]:
         chunks: list[ChunkRecord] = []
@@ -100,21 +109,47 @@ class RetrievalService:
         document_ids: list[str],
         query: str,
         limit: int = 6,
+        *,
+        preferred_document_ids: set[str] | None = None,
+        preferred_terms: list[str] | None = None,
+        hidden_document_ids: set[str] | None = None,
+        strong_match_terms: list[str] | None = None,
     ) -> list[SearchResult]:
         documents = [case.documents[doc_id] for doc_id in document_ids if doc_id in case.documents]
         chunks = self.build_chunks(documents)
         query_tokens = _tokenize(query)
         query_vector = self.ollama.embed(query)
+        preferred_terms = [term.lower() for term in (preferred_terms or []) if term.strip()]
+        strong_match_terms = [term.lower() for term in (strong_match_terms or []) if term.strip()]
 
-        scored: list[SearchResult] = []
+        lexical_scored: list[tuple[float, ChunkRecord, list[str]]] = []
         for chunk in chunks:
             chunk_tokens = _tokenize(chunk.text)
             overlap = len(set(query_tokens) & set(chunk_tokens))
             entity_matches = [tag for tag in chunk.document.entity_tags if tag.lower() in query.lower()]
             keyword_score = overlap + (1.5 * len(entity_matches))
+            text_lower = f"{chunk.document.title} {chunk.text} {' '.join(chunk.document.entity_tags)}".lower()
+            if preferred_document_ids and chunk.document.id in preferred_document_ids:
+                keyword_score += 1.5
+            if preferred_terms:
+                keyword_score += 1.2 * sum(1 for term in preferred_terms if term in text_lower)
+            if hidden_document_ids and chunk.document.id in hidden_document_ids:
+                strong_match = any(term in text_lower for term in strong_match_terms) if strong_match_terms else False
+                if not strong_match:
+                    keyword_score -= 1.5
+            if keyword_score <= 0 and query_vector is None:
+                continue
+            lexical_scored.append((keyword_score, chunk, entity_matches))
+
+        lexical_scored.sort(key=lambda item: item[0], reverse=True)
+        shortlist_size = max(limit * 4, 8)
+        shortlisted = lexical_scored[:shortlist_size] if lexical_scored else []
+
+        scored: list[SearchResult] = []
+        for keyword_score, chunk, entity_matches in shortlisted:
             semantic_score = 0.0
             if query_vector is not None:
-                chunk_vector = self.ollama.embed(chunk.text)
+                chunk_vector = self._get_chunk_embedding(chunk)
                 if chunk_vector is not None:
                     semantic_score = _cosine_similarity(query_vector, chunk_vector) * 4.0
             total_score = keyword_score + semantic_score
@@ -123,6 +158,7 @@ class RetrievalService:
             snippet = chunk.text[:280] + ("..." if len(chunk.text) > 280 else "")
             scored.append(
                 SearchResult(
+                    chunk_id=chunk.chunk_id,
                     document_id=chunk.document.id,
                     title=chunk.document.title,
                     folder=chunk.document.folder,
@@ -159,6 +195,10 @@ class RetrievalService:
         document_ids: list[str],
         query: str,
         evidence: CaseDocument | None = None,
+        suspect: object | None = None,
+        memory_summary: str = "",
+        discovered_contexts: list[str] | None = None,
+        preferred_document_ids: set[str] | None = None,
         limit: int = 3,
     ) -> list[SearchResult]:
         """Return compact evidence snippets to ground dialogue replies.
@@ -168,11 +208,30 @@ class RetrievalService:
         relevant unlocked archive passages so dialogue can be anchored in case
         material instead of only the suspect profile.
         """
-        results = self.search(case, document_ids, query, limit=limit)
+        suspect_terms: list[str] = []
+        if suspect is not None:
+            display_name = getattr(suspect, "display_name", "")
+            role = getattr(getattr(suspect, "public_profile", None), "role", "")
+            protective_target = getattr(getattr(suspect, "personality_profile", None), "protective_target", "")
+            suspect_terms.extend([display_name, role, protective_target])
+        context_terms = (discovered_contexts or [])[-4:]
+        preferred_terms = [memory_summary, *context_terms, *suspect_terms]
+        hidden_document_ids = {doc_id for doc_id in document_ids if case.documents[doc_id].unlock_rule}
+        results = self.search(
+            case,
+            document_ids,
+            query,
+            limit=limit,
+            preferred_document_ids=preferred_document_ids,
+            preferred_terms=preferred_terms,
+            hidden_document_ids=hidden_document_ids,
+            strong_match_terms=[query, *(evidence.entity_tags if evidence else [])],
+        )
         if evidence is None:
             return results
 
         evidence_result = SearchResult(
+            chunk_id=f"{evidence.id}::direct",
             document_id=evidence.id,
             title=evidence.title,
             folder=evidence.folder,

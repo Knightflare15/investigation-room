@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from functools import lru_cache
 from pathlib import Path
 
@@ -44,6 +45,24 @@ class AuthoringService:
     def case_dir(self, case_id: str) -> Path:
         return self.cases_root / case_id
 
+    def _requested_case_id(self, requested_id: str | None) -> str | None:
+        if requested_id is None:
+            return None
+        normalized = _slugify(requested_id.strip())
+        return normalized if requested_id.strip() else None
+
+    def _allocate_draft_case_id(self, title_hint: str) -> str:
+        base_slug = _slugify(title_hint.strip())[:48] if title_hint.strip() else "case"
+        candidate = f"draft-{base_slug}"
+        suffix = 2
+        while self.case_dir(candidate).exists():
+            candidate = f"draft-{base_slug}-{suffix}"
+            suffix += 1
+        return candidate
+
+    def _resolve_case_id(self, requested_id: str | None, title_hint: str) -> str:
+        return self._requested_case_id(requested_id) or self._allocate_draft_case_id(title_hint)
+
     def is_admin(self, alias: str) -> bool:
         return alias in settings.admin_aliases
 
@@ -66,9 +85,10 @@ class AuthoringService:
         return case_dir
 
     def create_case(self, payload: CreateCaseRequest, owner_alias: str) -> AuthoringBundle:
-        case_dir = self.case_dir(payload.id)
+        case_id = self._resolve_case_id(payload.id, payload.title)
+        case_dir = self.case_dir(case_id)
         if case_dir.exists():
-            raise ValueError(f"Case '{payload.id}' already exists")
+            raise ValueError(f"Case '{case_id}' already exists")
 
         (case_dir / "archive").mkdir(parents=True, exist_ok=True)
         (case_dir / "prompts").mkdir(parents=True, exist_ok=True)
@@ -77,7 +97,7 @@ class AuthoringService:
         (case_dir / "assets" / "locations").mkdir(parents=True, exist_ok=True)
 
         case_config = CaseConfig(
-            id=payload.id,
+            id=case_id,
             title=payload.title,
             hook=payload.hook,
             difficulty=payload.difficulty,
@@ -154,14 +174,14 @@ class AuthoringService:
 
         document = CaseDocument(
             id="doc_incident",
-            case_id=payload.id,
+            case_id=case_id,
             title="Incident Summary",
             folder="crime_scene",
             doc_type="police_report",
             source_label="Police First-Pass File",
             summary="Replace with the initial incident summary.",
             body="Replace this document body with the first authored evidence file for your mystery.",
-            markdown_path=f"cases/{payload.id}/archive/doc-001-incident-summary.md",
+            markdown_path=f"cases/{case_id}/archive/doc-001-incident-summary.md",
             entity_tags=["victim", "timeline"],
             image_path="evidence/template-evidence.svg",
         )
@@ -177,8 +197,8 @@ class AuthoringService:
         }
 
         bundle = AuthoringBundle(case=case_config, suspects=[suspect], documents=[document], prompts=prompts, assets=[])
-        self.save_bundle(payload.id, bundle, owner_alias)
-        return self.load_bundle(payload.id, owner_alias)
+        self.save_bundle(case_id, bundle, owner_alias)
+        return self.load_bundle(case_id, owner_alias)
 
     def load_bundle(self, case_id: str, alias: str) -> AuthoringBundle:
         if not self._can_access_case(case_id, alias):
@@ -290,16 +310,20 @@ class AuthoringService:
     def generate_case_from_brief(self, payload: CaseBriefInput, owner_alias: str) -> GenerateCaseDraftResponse:
         parsed = self.generator.parse_brief(payload)
         extracted = self.generator.extract_case_draft(parsed)
+        case_id = self._requested_case_id(payload.case_id) or self._allocate_draft_case_id(extracted.title)
+        extracted.case_id = case_id
         bundle = self.generator.generate_bundle(extracted, owner_alias, payload.difficulty, payload.estimated_minutes)
-        self._prepare_generated_case_dir(payload.case_id, owner_alias)
-        saved = self.save_bundle(payload.case_id, bundle, owner_alias)
+        self._prepare_generated_case_dir(case_id, owner_alias)
+        saved = self.save_bundle(case_id, bundle, owner_alias)
         return GenerateCaseDraftResponse(bundle=saved, warnings=extracted.warnings)
 
     def ingest_case_from_source(self, payload: CaseIngestionInput, owner_alias: str) -> CaseIngestionResponse:
         extracted, groundings = self.source_ingestion.extract(payload)
+        case_id = self._requested_case_id(payload.case_id) or self._allocate_draft_case_id(extracted.title)
+        extracted.case_id = case_id
         bundle = self.generator.generate_bundle(extracted, owner_alias, payload.difficulty, payload.estimated_minutes)
         grounding_notes = "\n".join(
-            f"- {grounding.generated_field}: {', '.join(grounding.supporting_chunk_ids)} | {grounding.preview}"
+            f"- {grounding.generated_field} [{grounding.method}/{grounding.confidence}]: {grounding.generated_value} | {', '.join(grounding.supporting_chunk_ids)} | {grounding.preview}"
             for grounding in groundings
         )
         if grounding_notes:
@@ -308,8 +332,8 @@ class AuthoringService:
                 + " This case was generated from source-ingested material; favor details supported by the source grounding notes."
             )
             bundle.prompts["source_grounding_notes"] = grounding_notes
-        self._prepare_generated_case_dir(payload.case_id, owner_alias)
-        saved = self.save_bundle(payload.case_id, bundle, owner_alias)
+        self._prepare_generated_case_dir(case_id, owner_alias)
+        saved = self.save_bundle(case_id, bundle, owner_alias)
         return CaseIngestionResponse(bundle=saved, warnings=extracted.warnings, groundings=groundings)
 
     def approve_case(self, case_id: str, actor_alias: str) -> AuthoringBundle:
@@ -318,6 +342,17 @@ class AuthoringService:
         bundle = load_authoring_bundle(self.case_dir(case_id))
         bundle.case.status = "approved"
         return self.save_bundle(case_id, bundle, actor_alias)
+
+    def delete_case(self, case_id: str, actor_alias: str) -> None:
+        case_dir = self.case_dir(case_id)
+        if not case_dir.exists():
+            raise ValueError(f"Case '{case_id}' does not exist")
+        bundle = load_authoring_bundle(case_dir)
+        if bundle.case.status != "draft":
+            raise ValueError("Only draft cases can be deleted")
+        if not (self.is_admin(actor_alias) or bundle.case.owner_alias == actor_alias):
+            raise ValueError("You do not have permission to delete this case")
+        shutil.rmtree(case_dir)
 
     def _ensure_template_assets(self, case_dir: Path) -> None:
         templates = {

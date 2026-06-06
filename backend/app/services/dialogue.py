@@ -264,6 +264,7 @@ class DialogueService:
             "evidence_title": evidence.title if evidence else None,
             "grounding": [
                 {
+                    "chunk_id": result.chunk_id,
                     "document_id": result.document_id,
                     "title": result.title,
                     "snippet": result.snippet,
@@ -377,6 +378,8 @@ class DialogueService:
             },
             "grounding": [
                 {
+                    "chunk_id": result.chunk_id,
+                    "document_id": result.document_id,
                     "title": result.title,
                     "snippet": result.snippet,
                     "matched_entity_tags": result.matched_entity_tags,

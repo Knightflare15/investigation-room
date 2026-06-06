@@ -1666,6 +1666,22 @@ textarea {
   margin-bottom: 14px;
 }
 
+.review-visual-assignment {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.review-visual-scroll {
+  max-height: min(58vh, 720px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.review-visual-scroll .authoring-grid {
+  margin-top: 0;
+}
+
 .review-actions {
   justify-content: flex-end;
 }
@@ -1776,6 +1792,14 @@ textarea {
 
   .modal-backdrop {
     padding: 12px;
+  }
+
+  .review-visual-assignment {
+    min-height: auto;
+  }
+
+  .review-visual-scroll {
+    max-height: none;
   }
 
   .command-bar,

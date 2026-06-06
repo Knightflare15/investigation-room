@@ -1,0 +1,112 @@
+{
+  "id": "1234",
+  "title": "The Clocktower Masquerade",
+  "hook": "A masked charity gala turns deadly when the host is found dead moments before the midnight unveiling of a historic town clock",
+  "difficulty": "medium",
+  "estimated_minutes": 45,
+  "version": 1,
+  "status": "approved",
+  "owner_alias": "Benoit",
+  "police_summary": "A masked charity gala turns deadly when the host is found dead moments before the midnight unveiling of a historic town clock.\n\nVictim: Julian Vale, the wealthy patron funding the restoration of the old clocktower and the public face of the heritage project.\nSetting: A grand municipal hall connected to an old clocktower, with a private gallery, a backstage dressing corridor, and a locked maintenance stairwell leading up to the clock mechanism.",
+  "cover_image_path": "locations/template-cover.svg",
+  "start_state": {
+    "initial_suspect_ids": [
+      "sus_clara-whitmore",
+      "sus_marcus-hale"
+    ],
+    "initial_document_ids": [
+      "doc_incident",
+      "doc_statement_clara-whitmore",
+      "doc_statement_marcus-hale"
+    ],
+    "initial_open_questions": [
+      "Julian discovered that Clara had knowingly protected a forged artifact to preserve the restoration project.",
+      "Marcus secretly helped Clara reach the maintenance stairwell because he believed she only wanted to plead with Julian.",
+      "The public timeline does not fully align with: Julian is found dead near the base of the clock mechanism after the guests are held in the main hall."
+    ]
+  },
+  "archive_domains": [
+    {
+      "id": "crime_scene",
+      "label": "Crime Scene Packet",
+      "image_path": "locations/template-location.svg",
+      "summary": "Primary incident records and early observations."
+    },
+    {
+      "id": "witness_accounts",
+      "label": "Witness Accounts",
+      "image_path": "locations/template-location.svg",
+      "summary": "Statements, recollections, and interview notes."
+    },
+    {
+      "id": "forensics",
+      "label": "Forensics and Medical",
+      "image_path": "evidence/template-evidence.svg",
+      "summary": "Generated forensic and medical-style summaries."
+    },
+    {
+      "id": "communications",
+      "label": "Communications and Logs",
+      "image_path": "evidence/template-evidence.svg",
+      "summary": "Messages, logs, or coordination records."
+    }
+  ],
+  "location_dossiers": [
+    {
+      "id": "loc_primary_scene",
+      "label": "Primary Scene",
+      "summary": "A grand municipal hall connected to an old clocktower, with a private gallery, a backstage dressing corridor, and a locked maintenance stairwell leading up to the clock mechanism.",
+      "image_path": "locations/template-location.svg",
+      "linked_document_ids": [
+        "doc_incident",
+        "doc_statement_clara-whitmore",
+        "doc_statement_marcus-hale"
+      ],
+      "unlock_rule": null
+    }
+  ],
+  "rescan_rules": [
+    {
+      "id": "unlock_doc_folded-card-from-the-gala-floor",
+      "trigger": {
+        "type": "context_entity_discovered",
+        "value": "note",
+        "location_id": "loc_primary_scene"
+      },
+      "effects": {
+        "unlock_document_ids": [
+          "doc_folded-card-from-the-gala-floor"
+        ],
+        "unlock_suspect_ids": [],
+        "surface_document_ids": [
+          "doc_incident"
+        ]
+      }
+    }
+  ],
+  "submission": {
+    "required_fields": [
+      "culprit_id",
+      "motive_text",
+      "timeline_text",
+      "evidence_ids"
+    ],
+    "min_evidence_count": 3
+  },
+  "valid_board_links": [
+    {
+      "id": "victim-doc_folded-card-from-the-gala-floor-hidden-thread",
+      "source_id": "victim",
+      "target_id": "doc_folded-card-from-the-gala-floor",
+      "link_type": "hidden-thread",
+      "notes": "One hidden thread tied to Folded Card from the Gala Floor may unlock more of the case."
+    },
+    {
+      "id": "sus_clara-whitmore-doc_folded-card-from-the-gala-floor-motive-link",
+      "source_id": "sus_clara-whitmore",
+      "target_id": "doc_folded-card-from-the-gala-floor",
+      "link_type": "motive-link",
+      "notes": "Clara Whitmore has a motive thread tied to Folded Card from the Gala Floor."
+    }
+  ]
+}

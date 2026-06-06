@@ -61,11 +61,18 @@ export function useGameActions() {
     try {
       const session = await api.getSession(state.alias);
       dispatch({ type: 'SET_SESSION_ROLE', payload: session.role });
-      const [cases, pendingCases] = await Promise.all([
+      const [cases, authoringCases, pendingCases] = await Promise.all([
         api.listCases(state.alias),
+        api.listAuthoringCases(state.alias),
         session.role === 'admin' ? api.listPendingCases(state.alias) : Promise.resolve([]),
       ]);
       dispatch({ type: 'SET_CASES', payload: cases });
+      dispatch({
+        type: 'SET_DRAFT_CASES',
+        payload: authoringCases
+          .map((bundle) => bundle.case)
+          .filter((caseSummary) => caseSummary.status === 'draft' && caseSummary.owner_alias === state.alias),
+      });
       dispatch({ type: 'SET_PENDING_CASES', payload: pendingCases });
       dispatch({ type: 'CLEAR_ERROR' });
     } catch (e) {
@@ -115,13 +122,20 @@ export function useGameActions() {
 
   async function reloadPlayableCases(preferredCaseId?: string) {
     if (!state.isAuthenticated) return;
-    const [session, nextCases] = await Promise.all([
+    const [session, nextCases, authoringCases] = await Promise.all([
       api.getSession(state.alias),
       api.listCases(state.alias),
+      api.listAuthoringCases(state.alias),
     ]);
     const nextPending = session.role === 'admin' ? await api.listPendingCases(state.alias) : [];
     dispatch({ type: 'SET_SESSION_ROLE', payload: session.role });
     dispatch({ type: 'SET_CASES', payload: nextCases });
+    dispatch({
+      type: 'SET_DRAFT_CASES',
+      payload: authoringCases
+        .map((bundle) => bundle.case)
+        .filter((caseSummary) => caseSummary.status === 'draft' && caseSummary.owner_alias === state.alias),
+    });
     dispatch({ type: 'SET_PENDING_CASES', payload: nextPending });
     const nextId = preferredCaseId || state.selectedCaseId || nextCases[0]?.id || '';
     if (nextId) {
@@ -306,6 +320,32 @@ export function useGameActions() {
     await refreshCaseState();
   }
 
+  async function deleteDraftCase(caseId: string): Promise<void> {
+    if (!state.isAuthenticated) return;
+    try {
+      await api.deleteAuthoringCase(caseId, state.alias);
+      const session = await api.getSession(state.alias);
+      const [cases, authoringCases, pendingCases] = await Promise.all([
+        api.listCases(state.alias),
+        api.listAuthoringCases(state.alias),
+        session.role === 'admin' ? api.listPendingCases(state.alias) : Promise.resolve([]),
+      ]);
+      dispatch({ type: 'SET_SESSION_ROLE', payload: session.role });
+      dispatch({ type: 'SET_CASES', payload: cases });
+      dispatch({
+        type: 'SET_DRAFT_CASES',
+        payload: authoringCases
+          .map((bundle) => bundle.case)
+          .filter((caseSummary) => caseSummary.status === 'draft' && caseSummary.owner_alias === state.alias),
+      });
+      dispatch({ type: 'SET_PENDING_CASES', payload: pendingCases });
+      dispatch({ type: 'CLEAR_ERROR' });
+    } catch (e) {
+      dispatch({ type: 'SET_ERROR', payload: (e as Error).message });
+      throw e;
+    }
+  }
+
   async function handleTogglePin(documentId: string): Promise<void> {
     if (!state.isAuthenticated || !state.selectedCaseId) return;
     try {
@@ -334,6 +374,7 @@ export function useGameActions() {
     handleBoardLink,
     handleSubmitTheory,
     restartCase,
+    deleteDraftCase,
     handleTogglePin,
   };
 }
