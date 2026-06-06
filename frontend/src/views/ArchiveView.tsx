@@ -6,7 +6,9 @@ type Props = {
   caseDetail: CaseDetailResponse;
   saveState: PlayerCaseState;
   selectedDocumentId: string;
+  selectedLocationId: string;
   onSelectDocument: (id: string) => void;
+  onSelectLocation: (id: string) => void;
   onTogglePin: (documentId: string) => Promise<void>;
   onOpenAttachment: (doc: CaseDocument | null) => void;
   searchQuery: string;
@@ -37,7 +39,9 @@ export default function ArchiveView({
   caseDetail,
   saveState,
   selectedDocumentId,
+  selectedLocationId,
   onSelectDocument,
+  onSelectLocation,
   onTogglePin,
   onOpenAttachment,
   searchQuery,
@@ -49,6 +53,7 @@ export default function ArchiveView({
 }: Props) {
   const unlockedDocuments = caseDetail.documents;
   const selectedDocument = unlockedDocuments.find((d) => d.id === selectedDocumentId) ?? unlockedDocuments[0];
+  const selectedLocation = caseDetail.location_dossiers.find((location) => location.id === selectedLocationId) ?? caseDetail.location_dossiers[0];
   const selectedDocumentIsPinned = Boolean(selectedDocument && saveState.pinned_evidence_ids.includes(selectedDocument.id));
   const selectedDocumentAttachment = getDocumentAttachmentMeta(selectedDocument);
 
@@ -57,10 +62,10 @@ export default function ArchiveView({
       <PanelHeader
         eyebrow="Archive"
         title={selectedDocument?.title ?? 'Case Archive'}
-        subtitle="Search, rescan, and cross-reference the file the police left behind."
+        subtitle="Search the file, then run focused rescans by applying a specific lead to a specific place."
         actions={
           <button className="dossier-button dossier-button-accent" onClick={onRescan}>
-            Rescan Archive
+            Run Focused Rescan
           </button>
         }
       />
@@ -68,7 +73,7 @@ export default function ArchiveView({
         <input
           value={searchQuery}
           onChange={(e) => onSearchQueryChange(e.target.value)}
-          placeholder="Search names, locations, motives, timeline gaps, aliases..."
+          placeholder="Lead to test in this location: hidden door, Ashdown Suite, Lena Orlov..."
         />
         <button className="dossier-button dossier-button-ghost" type="submit">
           Search
@@ -133,6 +138,21 @@ export default function ArchiveView({
         <div className="archive-intel-column">
           <section className="intel-card">
             <div className="intel-card-header">
+              <span>Rescan Location</span>
+              <strong>{caseDetail.location_dossiers.length.toString().padStart(2, '0')}</strong>
+            </div>
+            <select value={selectedLocation?.id ?? ''} onChange={(event) => onSelectLocation(event.target.value)}>
+              {caseDetail.location_dossiers.map((location) => (
+                <option key={location.id} value={location.id}>
+                  {location.label}
+                </option>
+              ))}
+            </select>
+            {selectedLocation ? <p className="document-summary">{selectedLocation.summary}</p> : null}
+          </section>
+
+          <section className="intel-card">
+            <div className="intel-card-header">
               <span>Unlocked Documents</span>
               <strong>{unlockedDocuments.length.toString().padStart(2, '0')}</strong>
             </div>
@@ -175,6 +195,8 @@ export default function ArchiveView({
               <strong>{rescanResults ? 'Live' : 'Idle'}</strong>
             </div>
             <ul className="plain-list">
+              <li>Location used: {caseDetail.location_dossiers.find((location) => location.id === rescanResults?.location_id)?.label || selectedLocation?.label || 'none yet'}</li>
+              <li>Focus used: {rescanResults?.focus || 'none yet'}</li>
               <li>Unlocked documents: {rescanResults?.unlocked_documents.join(', ') || 'none'}</li>
               <li>Unlocked suspects: {rescanResults?.unlocked_suspects.join(', ') || 'none'}</li>
               <li>Recent contexts: {rescanResults?.discovered_contexts.slice(-3).join(', ') || 'none yet'}</li>

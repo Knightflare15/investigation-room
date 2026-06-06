@@ -4,9 +4,10 @@ import { PanelHeader, SuspicionMeter } from '../ui';
 type Props = {
   suspects: Suspect[];
   communityStats: CommunityStatsResponse;
+  onRestartCase: () => Promise<void>;
 };
 
-export default function CommunityView({ suspects, communityStats }: Props) {
+export default function CommunityView({ suspects, communityStats, onRestartCase }: Props) {
   return (
     <section className="dossier-surface">
       <PanelHeader
@@ -14,6 +15,23 @@ export default function CommunityView({ suspects, communityStats }: Props) {
         title="How Other Detectives Accused"
         subtitle="Compare your theory against the broader pattern of suspicion and reasoning."
       />
+      <div className="community-actions">
+        <button
+          className="dossier-button dossier-button-ghost"
+          type="button"
+          onClick={() => {
+            if (
+              window.confirm(
+                'Restart this case from the beginning? Your current progress will be cleared, but the submitted theory stays in community history.',
+              )
+            ) {
+              void onRestartCase();
+            }
+          }}
+        >
+          Replay This Case
+        </button>
+      </div>
       <div className="community-grid">
         <section className="intel-card">
           <div className="intel-card-header">

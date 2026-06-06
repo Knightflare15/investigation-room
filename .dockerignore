@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+backend/__pycache__
+backend/**/*.pyc
+backend/**/*.pyo
+backend/**/*.pyd
+backend/data
+frontend/node_modules
+frontend/dist
+frontend/*.tsbuildinfo
+frontend/.vite
+npm-debug.log
+README.md
+INTERVIEW_README.md
+AZURE_DEPLOY.md

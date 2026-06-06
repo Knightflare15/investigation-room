@@ -173,51 +173,6 @@ export default function InterrogationView({
             ) : null}
           </section>
 
-          <section className="intel-card">
-            <div className="intel-card-header">
-              <span>Interrogation Tools</span>
-              <strong>
-                {activeConversation?.trust ?? 50}/{activeConversation?.guardedness ?? 25}
-              </strong>
-            </div>
-            <div className="tool-list">
-              <button
-                className="tool-row"
-                type="button"
-                onClick={() => setMessageDraft('Summarize what you have told me so far.')}
-              >
-                Summarize Statement
-              </button>
-              <button
-                className="tool-row"
-                type="button"
-                onClick={() =>
-                  setMessageDraft("Your account doesn't align with the evidence. Walk me through the timeline again.")
-                }
-              >
-                Check Consistency
-              </button>
-              <button
-                className="tool-row"
-                type="button"
-                onClick={() =>
-                  setMessageDraft(
-                    `Compare your statement to ${selectedDocument?.title ?? 'this record'} — there is a discrepancy.`,
-                  )
-                }
-              >
-                Compare to Evidence
-              </button>
-              <button
-                className="tool-row"
-                type="button"
-                onClick={() => setMessageDraft(followUpPrompts[0] ?? 'Press the timeline')}
-              >
-                Generate Follow-up
-              </button>
-            </div>
-          </section>
-
           {activeConversation?.memory_summary ? (
             <section className="intel-card">
               <div className="intel-card-header">

@@ -130,6 +130,74 @@ const emptySourceForm: CaseIngestionInput = {
   title_hint: '',
 };
 
+const briefHeadings = [
+  'Case Title',
+  'Premise',
+  'Victim',
+  'Setting',
+  'Suspects',
+  'Relationships',
+  'Timeline',
+  'Evidence',
+  'Hidden Truth',
+  'Solution',
+] as const;
+
+function parseStructuredSections(text: string): Map<string, string> {
+  const sections = new Map<string, string>();
+  const headingPattern = new RegExp(`^(?<heading>${briefHeadings.map((heading) => heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*:?\\s*$`, 'gim');
+  const matches = Array.from(text.matchAll(headingPattern));
+  for (let index = 0; index < matches.length; index += 1) {
+    const heading = matches[index].groups?.heading ?? '';
+    const start = (matches[index].index ?? 0) + matches[index][0].length;
+    const end = index + 1 < matches.length ? (matches[index + 1].index ?? text.length) : text.length;
+    sections.set(heading, text.slice(start, end).trim());
+  }
+  return sections;
+}
+
+function mergeBriefWithRefinement(brief: string, refinementPrompt: string): string {
+  const baseSections = parseStructuredSections(brief);
+  if (!baseSections.size) {
+    return `${brief.trim()}\n\n${refinementPrompt.trim()}`;
+  }
+
+  const refinementSections = parseStructuredSections(refinementPrompt);
+  if (!refinementSections.size) {
+    const inferredSections = new Map<string, string[]>();
+    for (const line of refinementPrompt.split('\n').map((value) => value.trim()).filter(Boolean)) {
+      const lower = line.toLowerCase();
+      const assign = (section: string, value: string) => {
+        const existing = inferredSections.get(section) ?? [];
+        existing.push(value);
+        inferredSections.set(section, existing);
+      };
+      if (lower.startsWith('suspect') || lower.startsWith('add suspect')) assign('Suspects', line.replace(/^add\s+/i, ''));
+      else if (lower.startsWith('evidence') || lower.startsWith('add evidence')) assign('Evidence', line.replace(/^add\s+/i, ''));
+      else if (lower.startsWith('location') || lower.startsWith('add location')) assign('Setting', line.replace(/^add\s+/i, ''));
+      else if (lower.startsWith('timeline')) assign('Timeline', line);
+      else if (lower.startsWith('relationship')) assign('Relationships', line);
+      else if (lower.startsWith('hidden truth')) assign('Hidden Truth', line);
+      else if (lower.startsWith('solution') || lower.startsWith('culprit') || lower.startsWith('motive')) assign('Solution', line);
+      else assign('Premise', line);
+    }
+    inferredSections.forEach((lines, section) => {
+      refinementSections.set(section, lines.join('\n'));
+    });
+  }
+
+  for (const heading of briefHeadings) {
+    const addition = refinementSections.get(heading);
+    if (!addition) continue;
+    const current = baseSections.get(heading) ?? '';
+    baseSections.set(heading, [current, addition].filter(Boolean).join('\n\n').trim());
+  }
+
+  return briefHeadings
+    .map((heading) => `${heading}\n${baseSections.get(heading) ?? ''}`.trim())
+    .join('\n\n');
+}
+
 function cloneBundle(bundle: AuthoringBundle): AuthoringBundle {
   return JSON.parse(JSON.stringify(bundle)) as AuthoringBundle;
 }
@@ -152,6 +220,10 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
   const [sourceGroundings, setSourceGroundings] = useState<SourceGrounding[]>([]);
   const [advancedRescanRules, setAdvancedRescanRules] = useState('[]');
   const [advancedBoardLinks, setAdvancedBoardLinks] = useState('[]');
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [reviewPrompt, setReviewPrompt] = useState('');
+  const [reviewRegenerating, setReviewRegenerating] = useState(false);
+  const [lastGeneratedMode, setLastGeneratedMode] = useState<'brief' | 'source' | null>(null);
 
   useEffect(() => {
     void loadAuthoringCases();
@@ -185,6 +257,7 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
     setDraft(bundle);
     setGenerationWarnings([]);
     setSourceGroundings([]);
+    setReviewModalOpen(false);
     setAdvancedRescanRules(JSON.stringify(bundle.case.rescan_rules, null, 2));
     setAdvancedBoardLinks(JSON.stringify(bundle.case.valid_board_links, null, 2));
   }
@@ -254,6 +327,9 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
       setDraft(generated.bundle);
       setGenerationWarnings(generated.warnings);
       setSourceGroundings([]);
+      setLastGeneratedMode('brief');
+      setReviewPrompt('');
+      setReviewModalOpen(true);
       setStatus(`Generated draft case ${generated.bundle.case.title}.`);
       await loadAuthoringCases();
       setSelectedCaseId(generated.bundle.case.id);
@@ -271,6 +347,9 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
       setDraft(generated.bundle);
       setGenerationWarnings(generated.warnings);
       setSourceGroundings(generated.groundings);
+      setLastGeneratedMode('source');
+      setReviewPrompt('');
+      setReviewModalOpen(true);
       setStatus(`Ingested draft case ${generated.bundle.case.title}.`);
       await loadAuthoringCases();
       setSelectedCaseId(generated.bundle.case.id);
@@ -281,21 +360,31 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
     }
   }
 
-  async function handleSave() {
-    if (!draft) return;
+  async function persistDraft(next: AuthoringBundle, notice: string) {
     try {
-      const next = cloneBundle(draft);
       next.case.rescan_rules = JSON.parse(advancedRescanRules);
       next.case.valid_board_links = JSON.parse(advancedBoardLinks);
       const saved = await api.saveAuthoringCase(next.case.id, alias, next);
       setDraft(saved);
       setGenerationWarnings([]);
-      setStatus(`Saved ${saved.case.title}.`);
+      setStatus(notice.replace('{title}', saved.case.title));
       await loadAuthoringCases();
       onSelectCase(saved.case.id);
       await onPlayableCasesChanged(saved.case.id);
+      return saved;
     } catch (error) {
       setStatus((error as Error).message);
+      throw error;
+    }
+  }
+
+  async function handleSave() {
+    if (!draft) return;
+    const next = cloneBundle(draft);
+    try {
+      await persistDraft(next, 'Saved {title}.');
+    } catch {
+      // persistDraft already updates the status message for the user.
     }
   }
 
@@ -316,13 +405,71 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
     const file = event.target.files?.[0];
     if (!file || !draft) return;
     try {
-      const uploaded = await api.uploadAuthoringAsset(draft.case.id, alias, uploadFolder, file);
-      setDraft((current) => (current ? { ...current, assets: [...current.assets, uploaded] } : current));
-      setStatus(`Uploaded ${uploaded.path}.`);
+      await uploadAssetToFolder(uploadFolder, file);
     } catch (error) {
       setStatus((error as Error).message);
     }
     event.target.value = '';
+  }
+
+  async function uploadAssetToFolder(folder: string, file: File) {
+    if (!draft) return;
+    const uploaded = await api.uploadAuthoringAsset(draft.case.id, alias, folder, file);
+    setDraft((current) => (current ? { ...current, assets: [...current.assets, uploaded] } : current));
+    setStatus(`Uploaded ${uploaded.path}.`);
+  }
+
+  async function handleReviewUpload(folder: string, event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      await uploadAssetToFolder(folder, file);
+    } catch (error) {
+      setStatus((error as Error).message);
+    }
+    event.target.value = '';
+  }
+
+  async function handleRegenerateWithReviewPrompt() {
+    if (!reviewPrompt.trim()) return;
+    setReviewRegenerating(true);
+    try {
+      if (lastGeneratedMode === 'brief') {
+        const mergedBrief = mergeBriefWithRefinement(briefForm.brief, reviewPrompt);
+        const nextBriefForm = { ...briefForm, brief: mergedBrief };
+        const generated = await api.generateAuthoringCase(alias, nextBriefForm);
+        setBriefForm(nextBriefForm);
+        setDraft(generated.bundle);
+        setGenerationWarnings(generated.warnings);
+        setSourceGroundings([]);
+      } else {
+        const mergedSource = `${sourceForm.source_text.trim()}\n\nRefinement Notes\n${reviewPrompt.trim()}`;
+        const nextSourceForm = { ...sourceForm, source_text: mergedSource };
+        const generated = await api.ingestAuthoringCase(alias, nextSourceForm);
+        setSourceForm(nextSourceForm);
+        setDraft(generated.bundle);
+        setGenerationWarnings(generated.warnings);
+        setSourceGroundings(generated.groundings);
+      }
+      setStatus('Regenerated the draft with your structured follow-up notes.');
+      setReviewPrompt('');
+      await loadAuthoringCases();
+    } catch (error) {
+      setStatus((error as Error).message);
+    } finally {
+      setReviewRegenerating(false);
+    }
+  }
+
+  async function handleSendToReview() {
+    if (!draft) return;
+    const next = cloneBundle(draft);
+    try {
+      await persistDraft(next, 'Sent {title} to admin review. It remains private until approved.');
+      setReviewModalOpen(false);
+    } catch {
+      // persistDraft already updates the status message for the user.
+    }
   }
 
   return (
@@ -331,7 +478,16 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
         eyebrow="Authoring Studio"
         title="Build and curate your own mystery files"
         subtitle="Edit case structure, drop assets into the case folders, and keep the dossier presentation coherent."
-        actions={status ? <div className="status-chip">{status}</div> : null}
+        actions={
+          <div className="authoring-header-actions">
+            {lastGeneratedMode && draft ? (
+              <button className="dossier-button dossier-button-ghost" type="button" onClick={() => setReviewModalOpen(true)}>
+                Review Extraction
+              </button>
+            ) : null}
+            {status ? <div className="status-chip">{status}</div> : null}
+          </div>
+        }
       />
 
       <div className="authoring-intro-grid">
@@ -913,6 +1069,188 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
           <p>Select or create a case to open the authoring studio.</p>
         </div>
       )}
+      {reviewModalOpen && draft ? (
+        <div className="modal-backdrop" onClick={() => setReviewModalOpen(false)}>
+          <section
+            className="media-modal review-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Generated draft review"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="document-toolbar">
+              <span>Generated Draft Review</span>
+              <button className="icon-button modal-close" type="button" onClick={() => setReviewModalOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="review-modal-body">
+              <section className="intel-card">
+                <div className="intel-card-header">
+                  <span>Detected Structure</span>
+                  <strong>{draft.case.status}</strong>
+                </div>
+                <div className="review-summary-grid">
+                  <div className="editor-card">
+                    <strong>Case</strong>
+                    <span>{draft.case.title}</span>
+                    <span>{draft.case.hook}</span>
+                  </div>
+                  <div className="editor-card">
+                    <strong>Suspects</strong>
+                    <span>{draft.suspects.length}</span>
+                    <span>{draft.suspects.map((suspect) => suspect.display_name).join(', ') || 'None detected'}</span>
+                  </div>
+                  <div className="editor-card">
+                    <strong>Evidence</strong>
+                    <span>{draft.documents.length}</span>
+                    <span>{draft.documents.slice(0, 4).map((document) => document.title).join(', ') || 'None detected'}</span>
+                  </div>
+                  <div className="editor-card">
+                    <strong>Locations</strong>
+                    <span>{draft.case.location_dossiers.length}</span>
+                    <span>{draft.case.location_dossiers.map((location) => location.label).join(', ') || 'None detected'}</span>
+                  </div>
+                </div>
+                {generationWarnings.length ? (
+                  <div className="asset-folder-note">
+                    <strong>Warnings</strong>
+                    <span>{generationWarnings.join(' | ')}</span>
+                  </div>
+                ) : null}
+                {sourceGroundings.length ? (
+                  <div className="intel-list">
+                    {sourceGroundings.slice(0, 6).map((grounding) => (
+                      <div key={grounding.generated_field} className="intel-row">
+                        <strong>{grounding.generated_field.replace(/_/g, ' ')}</strong>
+                        <span>{grounding.supporting_chunk_ids.join(', ')}</span>
+                        <span>{grounding.preview}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="intel-card">
+                <div className="intel-card-header">
+                  <span>Refine Missing Details</span>
+                  <strong>{reviewRegenerating ? 'Running' : 'Optional'}</strong>
+                </div>
+                <label>
+                  Structured Follow-up Prompt
+                  <textarea
+                    value={reviewPrompt}
+                    onChange={(event) => setReviewPrompt(event.target.value)}
+                    rows={8}
+                    placeholder={
+                      importMode === 'brief'
+                        ? 'Use headings when possible, for example:\nSuspects\nName: Vera Cole\nRole: Hotel Manager\nPublic Summary: ...\n\nEvidence\nTitle: Service Key Log\nSummary: ...'
+                        : 'Describe what is missing more structurally, for example:\nAdd suspect: Vera Cole, hotel manager hiding access logs.\nAdd location: Harbor Office, records annex behind the reception wall.\nAdd evidence: Service Key Log showing after-hours access.'
+                    }
+                  />
+                </label>
+                <div className="asset-folder-note">
+                  <strong>How this works</strong>
+                  <span>
+                    Use this when the auto-detected suspects, evidence, or locations are incomplete. We will regenerate the same draft using your follow-up note and keep the case private.
+                  </span>
+                </div>
+                <button
+                  className="dossier-button dossier-button-accent"
+                  type="button"
+                  disabled={!reviewPrompt.trim() || reviewRegenerating}
+                  onClick={handleRegenerateWithReviewPrompt}
+                >
+                  {reviewRegenerating ? 'Regenerating...' : 'Regenerate With Notes'}
+                </button>
+              </section>
+
+              <section className="intel-card">
+                <div className="intel-card-header">
+                  <span>Quick Visual Assignment</span>
+                  <strong>{draft.assets.length.toString().padStart(2, '0')}</strong>
+                </div>
+                <div className="review-asset-upload-row">
+                  <label className="dossier-button dossier-button-ghost">
+                    Upload Suspect Image
+                    <input type="file" accept="image/*,.svg" hidden onChange={(event) => void handleReviewUpload('suspects', event)} />
+                  </label>
+                  <label className="dossier-button dossier-button-ghost">
+                    Upload Evidence Image
+                    <input type="file" accept="image/*,.svg" hidden onChange={(event) => void handleReviewUpload('evidence', event)} />
+                  </label>
+                  <label className="dossier-button dossier-button-ghost">
+                    Upload Location Image
+                    <input type="file" accept="image/*,.svg" hidden onChange={(event) => void handleReviewUpload('locations', event)} />
+                  </label>
+                </div>
+                <div className="authoring-grid">
+                  {draft.suspects.map((suspect, index) => (
+                    <div key={`review-suspect-${suspect.id}`} className="editor-card">
+                      <MediaPlate src={suspect.image_url} alt={suspect.display_name} kind="suspect" label={suspect.portrait_key ?? suspect.display_name.slice(0, 2)} />
+                      <strong>{suspect.display_name}</strong>
+                      <select
+                        value={suspect.image_path ?? ''}
+                        onChange={(event) => updateSuspects((suspects) => { suspects[index].image_path = event.target.value || null; })}
+                      >
+                        <option value="">Default / None</option>
+                        {suspectAssets.map((asset) => (
+                          <option key={asset.path} value={asset.path}>
+                            {asset.path}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                  {draft.documents.slice(0, 6).map((document, index) => (
+                    <div key={`review-document-${document.id}`} className="editor-card">
+                      <MediaPlate src={document.image_url} alt={document.title} kind="evidence" label={document.id.toUpperCase()} />
+                      <strong>{document.title}</strong>
+                      <select
+                        value={document.image_path ?? ''}
+                        onChange={(event) => updateDocuments((documents) => { documents[index].image_path = event.target.value || null; })}
+                      >
+                        <option value="">Default / None</option>
+                        {evidenceAssets.concat(locationAssets).map((asset) => (
+                          <option key={asset.path} value={asset.path}>
+                            {asset.path}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                  {draft.case.location_dossiers.map((location, index) => (
+                    <div key={`review-location-${location.id}`} className="editor-card">
+                      <MediaPlate src={location.image_url} alt={location.label} kind="location" label="Location" />
+                      <strong>{location.label}</strong>
+                      <select
+                        value={location.image_path ?? ''}
+                        onChange={(event) => updateLocations((locations) => { locations[index].image_path = event.target.value || null; })}
+                      >
+                        <option value="">Default / None</option>
+                        {locationAssets.map((asset) => (
+                          <option key={asset.path} value={asset.path}>
+                            {asset.path}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <div className="authoring-actions review-actions">
+                <button className="dossier-button dossier-button-ghost" type="button" onClick={() => setReviewModalOpen(false)}>
+                  Continue Editing
+                </button>
+                <button className="dossier-button dossier-button-accent" type="button" onClick={() => void handleSendToReview()}>
+                  Send Draft To Review
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

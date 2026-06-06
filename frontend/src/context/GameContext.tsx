@@ -34,6 +34,7 @@ export type GameState = {
   selectedView: ViewMode;
   selectedSuspectId: string;
   selectedDocumentId: string;
+  selectedLocationId: string;
   searchQuery: string;
   searchResults: SearchResult[];
   lastGroundingResults: SearchResult[];
@@ -63,6 +64,7 @@ export type GameAction =
   | { type: 'SET_SELECTED_CASE'; payload: string }
   | { type: 'SET_SELECTED_SUSPECT'; payload: string }
   | { type: 'SET_SELECTED_DOCUMENT'; payload: string }
+  | { type: 'SET_SELECTED_LOCATION'; payload: string }
   | { type: 'SET_CASES'; payload: CaseSummary[] }
   | { type: 'SET_PENDING_CASES'; payload: CaseSummary[] }
   | { type: 'SET_CASE_SEARCH_QUERY'; payload: string }
@@ -76,6 +78,7 @@ export type GameAction =
   | { type: 'SET_LAST_GROUNDING_RESULTS'; payload: SearchResult[] }
   | { type: 'SET_LEAD_MESSAGES'; payload: string[] }
   | { type: 'SET_RESCAN_RESULTS'; payload: RescanResponse }
+  | { type: 'CLEAR_RESCAN_RESULTS' }
   | { type: 'SET_MEDIA_PREVIEW'; payload: MediaPreview | null }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_ERROR'; payload: string }
@@ -100,6 +103,7 @@ const initialState: GameState = {
   selectedView: 'interrogation',
   selectedSuspectId: '',
   selectedDocumentId: '',
+  selectedLocationId: '',
   searchQuery: '',
   searchResults: [],
   lastGroundingResults: [],
@@ -145,11 +149,20 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'SET_VIEW':
       return { ...state, selectedView: action.payload };
     case 'SET_SELECTED_CASE':
-      return { ...state, selectedCaseId: action.payload, leadMessages: [] };
+      return {
+        ...state,
+        selectedCaseId: action.payload,
+        selectedSuspectId: '',
+        selectedDocumentId: '',
+        selectedLocationId: '',
+        leadMessages: [],
+      };
     case 'SET_SELECTED_SUSPECT':
       return { ...state, selectedSuspectId: action.payload };
     case 'SET_SELECTED_DOCUMENT':
       return { ...state, selectedDocumentId: action.payload };
+    case 'SET_SELECTED_LOCATION':
+      return { ...state, selectedLocationId: action.payload };
     case 'SET_CASES':
       return { ...state, cases: action.payload };
     case 'SET_PENDING_CASES':
@@ -159,6 +172,15 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'SET_CASE_DETAIL': {
       const detail = action.payload;
       const unlockedSuspects = detail.suspects;
+      const selectedDocumentId = detail.documents.some((document) => document.id === state.selectedDocumentId)
+        ? state.selectedDocumentId
+        : detail.documents[0]?.id || '';
+      const selectedLocationId = detail.location_dossiers.some((location) => location.id === state.selectedLocationId)
+        ? state.selectedLocationId
+        : detail.location_dossiers[0]?.id || '';
+      const selectedSuspectId = detail.suspects.some((suspect) => suspect.id === state.selectedSuspectId)
+        ? state.selectedSuspectId
+        : detail.suspects[0]?.id || '';
       const boardNodes: Array<{ id: string; label: string }> = [
         { id: 'victim', label: 'Victim' },
         ...detail.suspects.map((s) => ({ id: s.id, label: s.display_name })),
@@ -177,8 +199,9 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         unlockedSuspects,
         boardNodes,
         folderCounts,
-        selectedDocumentId: state.selectedDocumentId || detail.documents[0]?.id || '',
-        selectedSuspectId: state.selectedSuspectId || detail.suspects[0]?.id || '',
+        selectedDocumentId,
+        selectedLocationId,
+        selectedSuspectId,
         suspicionValue: state.saveState?.suspicion_level ?? detail.state.suspicion_level,
       };
     }
@@ -256,6 +279,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...state, leadMessages: action.payload };
     case 'SET_RESCAN_RESULTS':
       return { ...state, rescanResults: action.payload };
+    case 'CLEAR_RESCAN_RESULTS':
+      return { ...state, rescanResults: null };
     case 'SET_MEDIA_PREVIEW':
       return { ...state, mediaPreview: action.payload };
     case 'SET_LOADING':

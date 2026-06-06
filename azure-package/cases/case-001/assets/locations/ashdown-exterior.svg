@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900">
+  <rect width="1400" height="900" fill="#121214"/>
+  <rect y="620" width="1400" height="280" fill="#1d1a1a"/>
+  <path d="M180 640h1040V270L700 130 180 270z" fill="#2b2727" stroke="#caa66f" stroke-width="6"/>
+  <path d="M260 640V320h880v320" fill="#413634"/>
+  <path d="M360 350h140v180H360zM580 350h140v180H580zM800 350h140v180H800z" fill="#d0a05d"/>
+  <path d="M620 470h160v170H620z" fill="#251d1b"/>
+  <text x="700" y="770" fill="#f3e8d6" font-family="Georgia, serif" font-size="62" text-anchor="middle">Ashdown Hotel</text>
+</svg>

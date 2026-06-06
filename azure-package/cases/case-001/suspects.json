@@ -1,0 +1,192 @@
+{
+  "suspects": [
+    {
+      "id": "sus_mara",
+      "display_name": "Mara Voss",
+      "unlock_rule": null,
+      "portrait_key": "MV",
+      "image_path": "suspects/mara-voss.svg",
+      "public_profile": {
+        "role": "Business partner",
+        "summary": "Calm, precise, and publicly loyal to the victim."
+      },
+      "personality_profile": {
+        "traits": ["controlled", "image-conscious", "strategic", "socially calculating"],
+        "speaking_style": "Polished, economical, and faintly condescending when pressed.",
+        "catchphrase": "Let's be exact.",
+        "verbal_tells": [
+          "Answers in neat, clipped sentences that sound pre-rehearsed.",
+          "Shifts from 'I' to 'we' when protecting the partnership narrative.",
+          "Treats emotional questions as if they are procedural misunderstandings."
+        ],
+        "outward_goal": "Preserve her credibility, control the room, and keep the business scandal contained.",
+        "protective_target": "the company",
+        "protective_reason": "A public collapse would destroy her leverage and expose the Harbor Office meeting."
+      },
+      "private_truth": {
+        "facts_known": [
+          "Adrian Vale planned to dissolve the partnership after the quarter closed.",
+          "Mara met Adrian privately two nights before the death at the Harbor Office."
+        ],
+        "secrets": [
+          "She altered a calendar entry after the incident to hide the Harbor Office meeting."
+        ],
+        "non_negotiables": [
+          "She did not enter Room 402 on the night of death."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "controlled and measured",
+        "lie_strategy": "deny until confronted with specific records",
+        "pressure_triggers": ["calendar", "hotel", "financial motive", "Harbor Office"],
+        "shut_down_threshold": 75
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      }
+    },
+    {
+      "id": "sus_ellis",
+      "display_name": "Dr. Ellis Wren",
+      "unlock_rule": null,
+      "portrait_key": "EW",
+      "image_path": "suspects/ellis-wren.svg",
+      "public_profile": {
+        "role": "Family physician",
+        "summary": "Soft-spoken doctor who insists the victim was under severe stress."
+      },
+      "personality_profile": {
+        "traits": ["empathetic", "careful", "professionally defensive", "morally anxious"],
+        "speaking_style": "Gentle, clinical, and deliberately indirect around sensitive details, often sounding like he is choosing each word to avoid harm.",
+        "catchphrase": "There is a difference between concern and certainty.",
+        "verbal_tells": [
+          "Uses medical framing to slow the conversation down.",
+          "Falls back on professional caution when cornered.",
+          "Answers painful questions with sympathy before he answers with facts."
+        ],
+        "outward_goal": "Protect his professional ethics and avoid being seen as reckless or disloyal to a patient.",
+        "protective_target": "his own medical judgment",
+        "protective_reason": "Admitting too much about the sedative question would make him look complicit or negligent."
+      },
+      "private_truth": {
+        "facts_known": [
+          "Adrian Vale asked whether repeated microdoses of sedative could be mistaken for natural collapse.",
+          "He believed Adrian feared someone inside his own circle."
+        ],
+        "secrets": [
+          "Ellis destroyed one draft note that mentioned the sedative question explicitly."
+        ],
+        "non_negotiables": [
+          "He never prescribed the final poison."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "gentle but professionally guarded",
+        "lie_strategy": "deflect through ethics and confidentiality",
+        "pressure_triggers": ["sedative", "medical note", "confidentiality"],
+        "shut_down_threshold": 75
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      }
+    },
+    {
+      "id": "sus_rohan",
+      "display_name": "Rohan Bell",
+      "unlock_rule": null,
+      "portrait_key": "RB",
+      "image_path": "suspects/rohan-bell.svg",
+      "public_profile": {
+        "role": "Hotel operations manager",
+        "summary": "Efficient and evasive, insisting the Ashdown's internal logs are routine."
+      },
+      "personality_profile": {
+        "traits": ["bureaucratic", "evasive", "status-aware", "thin-skinned"],
+        "speaking_style": "Brisk, procedural, and faintly irritated, especially when the hotel's reputation is at risk.",
+        "catchphrase": "That's an administrative matter.",
+        "verbal_tells": [
+          "Hides behind policy language.",
+          "Becomes sharper when off-book records are mentioned.",
+          "Uses routine and procedure as shields when he feels cornered."
+        ],
+        "outward_goal": "Protect the hotel, protect himself, and make every irregularity sound routine.",
+        "protective_target": "the Ashdown Hotel",
+        "protective_reason": "If the off-book bookings surface, the hotel's leadership and his own position are both in danger."
+      },
+      "private_truth": {
+        "facts_known": [
+          "A suite key was issued under a shell booking tied to an old client alias.",
+          "Rohan recognized the alias because Lena Orlov had used it before."
+        ],
+        "secrets": [
+          "He delayed giving the ledger to police because it could expose off-book bookings."
+        ],
+        "non_negotiables": [
+          "He was not with the victim at the final dinner table."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "polite, clipped, and slightly irritated",
+        "lie_strategy": "minimize administrative irregularities",
+        "pressure_triggers": ["ledger", "suite", "Lena Orlov", "Ashdown Suite"],
+        "shut_down_threshold": 80
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      }
+    },
+    {
+      "id": "sus_lena",
+      "display_name": "Lena Orlov",
+      "unlock_rule": "victim-hotel-ledger-secret-meeting",
+      "portrait_key": "LO",
+      "image_path": "suspects/lena-orlov.svg",
+      "public_profile": {
+        "role": "Political fixer",
+        "summary": "Charming and sharp, with no official reason to be in the police file."
+      },
+      "personality_profile": {
+        "traits": ["charming", "observant", "manipulative", "playfully predatory"],
+        "speaking_style": "Smooth, amused, and always a half-step ahead of the question, as if the conversation itself is a game she expects to win.",
+        "catchphrase": "People are rarely honest on the first pass.",
+        "verbal_tells": [
+          "Answers with a hint of amusement before becoming suddenly precise.",
+          "Offers fragments of truth to keep control of the exchange.",
+          "Turns direct accusations into observations about everyone else in the room."
+        ],
+        "outward_goal": "Keep leverage over everyone in the room while revealing as little as possible and staying the most informed person present.",
+        "protective_target": "her leverage",
+        "protective_reason": "Giving up the full story removes the pressure she holds over multiple suspects."
+      },
+      "private_truth": {
+        "facts_known": [
+          "Lena arranged a private meeting between Adrian and an unnamed investor in the Ashdown Suite.",
+          "She believed Mara Voss was panicking before the dinner even began."
+        ],
+        "secrets": [
+          "She removed one phone from the suite after the death because it contained leverage over multiple suspects."
+        ],
+        "non_negotiables": [
+          "She never touched the victim's drink."
+        ]
+      },
+      "dialogue_rules": {
+        "baseline_tone": "coolly amused and observant",
+        "lie_strategy": "admit fragments while protecting leverage",
+        "pressure_triggers": ["suite", "investor", "phone", "Mara Voss"],
+        "shut_down_threshold": 85
+      },
+      "memory_rules": {
+        "remember_topics": true,
+        "remember_confrontations": true,
+        "remember_detective_tone": true
+      }
+    }
+  ]
+}

@@ -156,6 +156,7 @@ export type SearchResponse = {
 
 export type RescanResponse = {
   focus: string;
+  location_id?: string | null;
   unlocked_documents: string[];
   unlocked_suspects: string[];
   surfaced_results: SearchResult[];

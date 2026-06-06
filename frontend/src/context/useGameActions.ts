@@ -149,6 +149,7 @@ export function useGameActions() {
         state.selectedCaseId,
         state.alias,
         state.searchQuery || 'Cross-check known contradictions',
+        state.selectedLocationId,
       );
       dispatch({ type: 'SET_RESCAN_RESULTS', payload: response });
       await refreshCaseState();
@@ -289,6 +290,22 @@ export function useGameActions() {
     return response;
   }
 
+  async function restartCase(): Promise<void> {
+    if (!state.isAuthenticated || !state.selectedCaseId) return;
+    const restarted = await api.restartCase(state.selectedCaseId, state.alias);
+    dispatch({ type: 'SET_SAVE_STATE', payload: restarted.state });
+    dispatch({ type: 'SET_SELECTED_SUSPECT', payload: restarted.state.unlocked_suspect_ids[0] ?? '' });
+    dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: restarted.state.unlocked_document_ids[0] ?? '' });
+    dispatch({ type: 'SET_SELECTED_LOCATION', payload: state.caseDetail?.location_dossiers[0]?.id ?? '' });
+    dispatch({ type: 'SET_SEARCH_QUERY', payload: '' });
+    dispatch({ type: 'SET_SEARCH_RESULTS', payload: [] });
+    dispatch({ type: 'SET_CONVERSATIONS', payload: {} });
+    dispatch({ type: 'SET_LAST_GROUNDING_RESULTS', payload: [] });
+    dispatch({ type: 'SET_LEAD_MESSAGES', payload: [] });
+    dispatch({ type: 'CLEAR_RESCAN_RESULTS' });
+    await refreshCaseState();
+  }
+
   async function handleTogglePin(documentId: string): Promise<void> {
     if (!state.isAuthenticated || !state.selectedCaseId) return;
     try {
@@ -316,6 +333,7 @@ export function useGameActions() {
     handleConfront,
     handleBoardLink,
     handleSubmitTheory,
+    restartCase,
     handleTogglePin,
   };
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+﻿import { useEffect, useRef } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import AuthoringStudio from './AuthoringStudio';
 import { useGame } from './context/GameContext';
@@ -18,12 +18,12 @@ type ViewId = 'intake' | 'archive' | 'interrogation' | 'board' | 'submission' | 
 type TabId = 'home' | ViewId;
 
 const caseTabs: Array<{ id: ViewId; label: string; glyph: string }> = [
-  { id: 'intake', label: 'Intake', glyph: '⌘' },
-  { id: 'archive', label: 'Archive', glyph: '▣' },
-  { id: 'interrogation', label: 'Interrogation', glyph: '✦' },
-  { id: 'board', label: 'Evidence Board', glyph: '⌗' },
-  { id: 'submission', label: 'Submission', glyph: '✓' },
-  { id: 'community', label: 'Community', glyph: '◌' },
+  { id: 'intake', label: 'Intake', glyph: 'IN' },
+  { id: 'archive', label: 'Archive', glyph: 'AR' },
+  { id: 'interrogation', label: 'Interrogation', glyph: 'IQ' },
+  { id: 'board', label: 'Evidence Board', glyph: 'BD' },
+  { id: 'submission', label: 'Submission', glyph: 'SB' },
+  { id: 'community', label: 'Community', glyph: 'CM' },
 ];
 
 const overviewLinks: Array<{ label: string; view: Exclude<ViewId, 'authoring'> }> = [
@@ -98,7 +98,9 @@ function CaseShell() {
                 caseDetail={caseDetail}
                 saveState={currentState}
                 selectedDocumentId={state.selectedDocumentId}
+                selectedLocationId={state.selectedLocationId}
                 onSelectDocument={(id) => dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: id })}
+                onSelectLocation={(id) => dispatch({ type: 'SET_SELECTED_LOCATION', payload: id })}
                 onTogglePin={actions.handleTogglePin}
                 onOpenAttachment={openDocumentAttachment}
                 searchQuery={state.searchQuery}
@@ -158,13 +160,28 @@ function CaseShell() {
                 pinnedDocuments={state.pinnedDocuments}
                 onSubmitTheory={actions.handleSubmitTheory}
                 onNavigateToCommunity={() => navigate(`/${caseId}/community`)}
+                onRestartCase={async () => {
+                  await actions.restartCase();
+                  navigate(`/${caseId}/interrogation`);
+                }}
               />
             ) : null
           }
         />
         <Route
           path="community"
-          element={communityStats ? <CommunityView suspects={unlockedSuspects} communityStats={communityStats} /> : null}
+          element={
+            communityStats ? (
+              <CommunityView
+                suspects={unlockedSuspects}
+                communityStats={communityStats}
+                onRestartCase={async () => {
+                  await actions.restartCase();
+                  navigate(`/${caseId}/interrogation`);
+                }}
+              />
+            ) : null
+          }
         />
         <Route
           path="authoring"
@@ -220,9 +237,9 @@ function AppShell() {
   const caseId = state.selectedCaseId;
   const isLibraryRoute = location.pathname === '/' || location.pathname === '/authoring';
   const tabs: Array<{ id: TabId; label: string; glyph: string }> = [
-    { id: 'home', label: 'Home', glyph: '⌂' },
+    { id: 'home', label: 'Home', glyph: 'HM' },
     ...caseTabs,
-    { id: 'authoring', label: 'Authoring', glyph: '✎' },
+    { id: 'authoring', label: 'Authoring', glyph: 'AU' },
   ];
 
   function navTo(view: TabId) {
@@ -276,12 +293,6 @@ function AppShell() {
           </div>
         </div>
         <div className="command-icons">
-          <button className="icon-button" type="button" aria-label="Search interface">
-            ⌕
-          </button>
-          <button className="icon-button" type="button" aria-label="Alerts">
-            ◌
-          </button>
           <div className="detective-badge">{state.alias.slice(0, 2).toUpperCase()}</div>
         </div>
       </header>
@@ -549,9 +560,6 @@ function AppShell() {
                   <div className="rail-theory-node center">Truth</div>
                   <div className="rail-theory-node">Means</div>
                 </div>
-                <button className="dossier-button dossier-button-ghost" onClick={() => navTo('board')}>
-                  Open Theory Board
-                </button>
               </section>
 
               <section className="rail-panel">
@@ -587,7 +595,7 @@ function AppShell() {
                 onClick={() => dispatch({ type: 'SET_MEDIA_PREVIEW', payload: null })}
                 aria-label="Close visual attachment"
               >
-                ×
+                x
               </button>
             </div>
             <div className="media-modal-body">
@@ -616,3 +624,4 @@ function AppShell() {
 export default function App() {
   return <AppShell />;
 }
+

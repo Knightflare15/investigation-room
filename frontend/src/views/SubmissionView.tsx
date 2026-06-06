@@ -8,13 +8,21 @@ type Props = {
   pinnedDocuments: CaseDocument[];
   onSubmitTheory: (culpritId: string, motive: string, timeline: string) => Promise<SubmitTheoryResponse>;
   onNavigateToCommunity: () => void;
+  onRestartCase: () => Promise<void>;
 };
 
-export default function SubmissionView({ caseDetail, pinnedDocuments, onSubmitTheory, onNavigateToCommunity }: Props) {
+export default function SubmissionView({
+  caseDetail,
+  pinnedDocuments,
+  onSubmitTheory,
+  onNavigateToCommunity,
+  onRestartCase,
+}: Props) {
   const [culpritId, setCulpritId] = useState(caseDetail.suspects[0]?.id ?? '');
   const [theoryMotive, setTheoryMotive] = useState('');
   const [theoryTimeline, setTheoryTimeline] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [error, setError] = useState('');
 
   async function handleSubmit(event: FormEvent) {
@@ -28,6 +36,25 @@ export default function SubmissionView({ caseDetail, pinnedDocuments, onSubmitTh
       setError((e as Error).message);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleRestart() {
+    if (
+      !window.confirm(
+        'Restart this case from the beginning? Your current progress will be cleared, but the submitted theory stays in community history.',
+      )
+    ) {
+      return;
+    }
+    setError('');
+    setRestarting(true);
+    try {
+      await onRestartCase();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRestarting(false);
     }
   }
 
@@ -59,9 +86,19 @@ export default function SubmissionView({ caseDetail, pinnedDocuments, onSubmitTh
             Timeline
             <textarea value={theoryTimeline} onChange={(e) => setTheoryTimeline(e.target.value)} />
           </label>
-          <button className="dossier-button dossier-button-accent" type="submit" disabled={submitting}>
-            {submitting ? 'Submitting…' : 'Submit Theory'}
-          </button>
+          <div className="submission-actions">
+            <button className="dossier-button dossier-button-accent" type="submit" disabled={submitting || restarting}>
+              {submitting ? 'Submitting...' : 'Submit Theory'}
+            </button>
+            <button
+              className="dossier-button dossier-button-ghost"
+              type="button"
+              onClick={handleRestart}
+              disabled={submitting || restarting}
+            >
+              {restarting ? 'Restarting...' : 'Restart Case'}
+            </button>
+          </div>
         </form>
 
         <aside className="intel-card">

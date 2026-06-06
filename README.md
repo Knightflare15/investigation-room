@@ -434,6 +434,9 @@ The authoring UI can:
 - scaffold a new case
 - generate a draft case from a pasted semi-structured case brief
 - ingest a raw pasted source packet into a draft case with source-grounding notes
+- open a post-generation review modal showing detected suspects, evidence, locations, warnings, and source grounding
+- regenerate the same draft with a structured follow-up prompt describing what is missing
+- assign default template visuals or upload custom images before review
 - edit case metadata
 - edit suspects
 - edit Markdown-backed documents
@@ -480,6 +483,17 @@ Generated raw-source drafts:
 - include source-grounding notes in the authoring response
 - save compact `source_grounding_notes` into prompts for later review
 
+Post-generation review flow:
+
+1. creator generates a draft from structured or raw input
+2. a review modal opens automatically
+3. the modal shows detected suspects, evidence, locations, warnings, and grounding notes
+4. the creator can add a structured refinement prompt if extraction missed something
+5. the same draft id is regenerated in place as long as it is still a private draft
+6. the creator can assign template assets or upload custom suspect, evidence, and location images
+7. the creator sends the draft to review
+8. the case remains `draft` until an admin approves it
+
 The current ingestion path is intentionally paste-only. It does not yet perform PDF parsing, OCR, automatic image moderation, or multi-document police-file ingestion.
 
 Authoring asset folders:
@@ -521,8 +535,9 @@ The current progression loop is:
 2. archive search derives new contexts
 3. suspect conversations add additional contexts
 4. rescans apply `context_entity_discovered` rules
-5. theory-board links apply `board_link_confirmed` rules
-6. newly unlocked documents or suspects appear in the active case state
+5. focused rescans apply `context_entity_discovered` rules using the specific lead the player typed in the specific location they selected
+6. the theory board remains a workspace for organizing links, not a progression unlock system
+7. newly unlocked documents or suspects appear in the active case state
 
 Conversation-driven discoveries now return explicit lead metadata:
 
@@ -571,7 +586,7 @@ The frontend also:
 3. home screen loads approved cases only
 4. player can open `Authoring Studio` to create a draft case, or search the public library and open a case
 5. backend creates or loads player save state
-6. player opens unlocked documents directly from the archive screen, searches evidence, interrogates suspects in session-style conversations, rescans, links board nodes, and submits a theory
+6. player opens unlocked documents directly from the archive screen, searches evidence, interrogates suspects in session-style conversations, runs focused rescans from specific leads in specific locations, uses the board to organize theory notes, and submits a theory
 
 ### Admin workflow
 
@@ -627,7 +642,7 @@ These are the highest-value human review tasks before presenting or deploying th
 - Review generated `SourceGrounding` notes after ingestion. They show which source chunks supported generated fields, but they are not proof that every generated sentence is perfect.
 - Strengthen suspect voice by editing each generated suspect's `personality_profile`, `private_truth`, and `dialogue_rules` in Authoring Studio after ingestion.
 - Replace template images before approval. The current placeholders are useful for drafts, but approved cases should have intentional suspect, evidence, and location visuals.
-- Remove tracked TypeScript build artifacts from git if they are already committed: `git rm --cached frontend/tsconfig.tsbuildinfo frontend/tsconfig.node.tsbuildinfo`.
+- Keep generated build artifacts out of git. `*.tsbuildinfo` is already ignored.
 - Try one full playthrough as a fresh player account after approving a generated case. Confirm the first documents, interrogation leads, rescans, board links, and final theory flow feel fair.
 - For a stronger RAG resume story, add one future pass where Ollama extracts structured JSON from retrieved source chunks, then compare it against the current deterministic extractor.
 

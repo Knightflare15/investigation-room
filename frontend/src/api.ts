@@ -219,16 +219,21 @@ export const api = {
   getSaveState(caseId: string, alias: string) {
     return request<SaveStateResponse>(`/cases/${caseId}/save-state`, alias);
   },
+  restartCase(caseId: string, alias: string) {
+    return request<SaveStateResponse>(`/cases/${caseId}/restart`, alias, {
+      method: 'POST',
+    });
+  },
   search(caseId: string, alias: string, query: string) {
     return request<SearchResponse>(`/cases/${caseId}/search`, alias, {
       method: 'POST',
       body: JSON.stringify({ query }),
     });
   },
-  rescan(caseId: string, alias: string, focus: string) {
+  rescan(caseId: string, alias: string, focus: string, locationId?: string) {
     return request<RescanResponse>(`/cases/${caseId}/rescan`, alias, {
       method: 'POST',
-      body: JSON.stringify({ focus }),
+      body: JSON.stringify({ focus, location_id: locationId ?? null }),
     });
   },
   talk(caseId: string, suspectId: string, alias: string, message: string) {

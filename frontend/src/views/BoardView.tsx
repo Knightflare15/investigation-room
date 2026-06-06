@@ -3,7 +3,6 @@ import {
   type Edge,
   type Node,
   Background,
-  Controls,
   ReactFlow,
   useEdgesState,
   useNodesState,
@@ -68,36 +67,23 @@ export default function BoardView({ caseDetail, saveState, boardNodes, onBoardLi
   const handleValidate = useCallback(async () => {
     try {
       const response = await onBoardLink(boardSource, boardTarget, boardType, boardType);
-      if (response.is_valid) {
-        const linkId = response.link_id;
-        setEdges((eds) => [
-          ...eds,
-          {
-            id: linkId,
-            source: boardSource,
-            target: boardTarget,
-            label: boardType,
-            animated: true,
-            style: { stroke: '#4ade80' },
-          },
-        ]);
-        setBoardFeedback(
-          `Validated. New threads: ${[...response.unlocked_documents, ...response.unlocked_suspects].join(', ') || 'none'}`,
-        );
-      } else {
-        setEdges((eds) => [
-          ...eds,
-          {
-            id: `unconfirmed-${Date.now()}`,
-            source: boardSource,
-            target: boardTarget,
-            label: boardType,
-            animated: false,
-            style: { stroke: '#f59e0b' },
-          },
-        ]);
-        setBoardFeedback('The deduction has been logged, but the board still needs stronger support.');
-      }
+      const linkId = response.link_id;
+      setEdges((eds) => [
+        ...eds,
+        {
+          id: linkId,
+          source: boardSource,
+          target: boardTarget,
+          label: boardType,
+          animated: response.is_valid,
+          style: { stroke: response.is_valid ? '#4ade80' : '#f59e0b' },
+        },
+      ]);
+      setBoardFeedback(
+        response.is_valid
+          ? 'Added to your board. Use interrogation or a focused rescan to test this theory.'
+          : 'Added as a tentative theory. The board is for organizing your thinking, not unlocking content.',
+      );
     } catch (e) {
       setBoardFeedback((e as Error).message);
     }
@@ -108,7 +94,7 @@ export default function BoardView({ caseDetail, saveState, boardNodes, onBoardLi
       <PanelHeader
         eyebrow="Evidence Board"
         title="Theory Progress"
-        subtitle="Connect motives, means, opportunity, and contradiction pressure into one stable accusation."
+        subtitle="Organize your theory here, then prove it through interrogation and focused rescans."
       />
       <div className="board-layout">
         <article className="theory-graph-card" style={{ height: 420 }}>
@@ -120,7 +106,6 @@ export default function BoardView({ caseDetail, saveState, boardNodes, onBoardLi
             fitView
           >
             <Background color="#2a2520" gap={20} />
-            <Controls />
           </ReactFlow>
         </article>
 
@@ -147,8 +132,8 @@ export default function BoardView({ caseDetail, saveState, boardNodes, onBoardLi
 
           <section className="intel-card">
             <div className="intel-card-header">
-              <span>Validate New Link</span>
-              <strong>Board Tool</strong>
+              <span>Add Board Link</span>
+              <strong>Workspace</strong>
             </div>
             <div className="board-form">
               <select value={boardSource} onChange={(e) => setBoardSource(e.target.value)}>
@@ -163,7 +148,7 @@ export default function BoardView({ caseDetail, saveState, boardNodes, onBoardLi
               </select>
               <input value={boardType} onChange={(e) => setBoardType(e.target.value)} placeholder="link type" />
               <button className="dossier-button dossier-button-accent" type="button" onClick={handleValidate}>
-                Validate Deduction
+                Add to Board
               </button>
             </div>
             {boardFeedback ? <p className="board-feedback">{boardFeedback}</p> : null}
