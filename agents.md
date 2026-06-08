@@ -5,6 +5,64 @@ Each entry lists what changed, which files were touched, and why.
 
 ---
 
+## Session 4 - Deduction Payoff System (2026-06-08)
+
+The game loop now has an authored payoff layer for detective deductions. Instead of only
+unlocking documents/suspects or logging raw board links, the backend can complete named
+deduction beats when a player has proven the required documents, contexts, board links, suspects,
+or revealed facts.
+
+### Step A - Authored deduction beats and persistence
+
+**Problem:** correct player reasoning was often implied but not acknowledged. Board links,
+rescans, and interrogation breakthroughs could be right without producing a clear "you proved
+this" moment.
+
+**Fix:**
+- `backend/app/models.py`: added `DeductionBeat`, `DeductionRequirements`, and
+  `DeductionMessage`; added `deduction_beats` to case config and
+  `completed_deduction_ids` to player state.
+- `backend/app/database.py`: persisted `completed_deduction_ids` for SQLite/Postgres and added
+  migration-safe column creation for existing local databases.
+- `backend/app/services/game.py`: added deterministic deduction evaluation after search, rescan,
+  interrogation, streaming interrogation, and board-link updates.
+
+### Step B - Player-facing payoff UI
+
+**Problem:** frontend clue/contradiction surfaces were mostly generic tag-derived text, so they
+did not carry authored mystery meaning.
+
+**Fix:**
+- `frontend/src/types.ts`, `frontend/src/context/GameContext.tsx`,
+  `frontend/src/context/useGameActions.ts`: threaded deduction messages and completed deductions
+  through API responses and state.
+- `frontend/src/views/ArchiveView.tsx` and `frontend/src/views/InterrogationView.tsx`: display
+  recent confirmed deductions alongside search/rescan/interrogation context.
+- `frontend/src/App.tsx`: added a right-rail "Proven Deductions" record and made theory progress
+  account for completed beats.
+- `frontend/src/views/BoardView.tsx`: valid links now show authored confirmation text when
+  available, and React Flow nodes/edges refresh when case state changes.
+
+### Step C - Ashdown case beats and regression coverage
+
+- `cases/case-001/case.json`: added deduction beats for the suite booking, Lena Orlov entering
+  the case, Harbor Office pressure, the recovered call chain, and the sedative pattern.
+- `backend/app/services/brief_generator.py`: generated and source-ingested cases now receive
+  default deduction beats derived from hidden documents, valid board links, culprit motive links,
+  and key evidence contexts.
+- `backend/tests/test_game_flow.py`: added coverage for completing a deduction, avoiding duplicate
+  completion messages, context-triggered deductions, and restart reset behavior.
+- `backend/tests/test_authoring_service.py`: added coverage that brief-generated and source-ingested
+  drafts include usable deduction beats.
+- `backend/tests/test_postgres_dialect.py`: skips cleanly when optional `psycopg` is not installed.
+
+### Verification
+
+Backend unittest discovery passes with one optional Postgres-driver skip. Frontend production
+build passes.
+
+---
+
 ## Session 3 - Account Auth, Draft Review, and Dialogue Reliability (2026-06-02)
 
 Several larger product changes landed after Session 2: real local account auth, player/admin

@@ -106,6 +106,7 @@ function CaseShell() {
                 searchQuery={state.searchQuery}
                 onSearchQueryChange={(query) => dispatch({ type: 'SET_SEARCH_QUERY', payload: query })}
                 searchResults={state.searchResults}
+                deductionMessages={state.deductionMessages}
                 rescanResults={state.rescanResults}
                 onSearch={async (event) => {
                   event.preventDefault();
@@ -129,6 +130,7 @@ function CaseShell() {
                 clueCards={state.clueCards}
                 groundingResults={state.lastGroundingResults}
                 leadMessages={state.leadMessages}
+                deductionMessages={state.deductionMessages}
                 followUpPrompts={state.followUpPrompts}
                 onTalk={actions.handleTalkStreaming}
                 onConfront={actions.handleConfront}
@@ -575,12 +577,36 @@ function AppShell() {
               <section className="rail-panel theory-rail">
                 <div className="rail-heading">
                   <span>Theory Board Progress</span>
-                  <strong>{Math.min(100, 18 + (currentState?.board_links.length ?? 0) * 12)}%</strong>
+                  <strong>{Math.min(100, 20 + state.completedDeductions.length * 16 + (currentState?.board_links.length ?? 0) * 6)}%</strong>
                 </div>
                 <div className="rail-theory-widget">
                   <div className="rail-theory-node">Motive</div>
                   <div className="rail-theory-node center">Truth</div>
                   <div className="rail-theory-node">Means</div>
+                </div>
+              </section>
+
+              <section className="rail-panel">
+                <div className="rail-heading">
+                  <span>Proven Deductions</span>
+                  <strong>{state.completedDeductions.length.toString().padStart(2, '0')}</strong>
+                </div>
+                <div className="contradiction-stack">
+                  {state.completedDeductions.length ? (
+                    state.completedDeductions.slice(-3).reverse().map((deduction) => (
+                      <article key={deduction.id} className="contradiction-card high">
+                        <div className="contradiction-topline">
+                          <span>proven</span>
+                          <strong>{deduction.title}</strong>
+                        </div>
+                        <p>{deduction.message}</p>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty-state compact">
+                      No deductions confirmed yet. Use rescans, evidence pins, and board links to prove a thread.
+                    </div>
+                  )}
                 </div>
               </section>
 

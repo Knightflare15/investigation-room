@@ -61,6 +61,32 @@ class BoardLinkDefinition(BaseModel):
     notes: str = ""
 
 
+class DeductionRequirements(BaseModel):
+    document_ids: list[str] = Field(default_factory=list)
+    context_values: list[str] = Field(default_factory=list)
+    board_link_ids: list[str] = Field(default_factory=list)
+    suspect_ids: list[str] = Field(default_factory=list)
+    revealed_fact_ids: list[str] = Field(default_factory=list)
+
+
+class DeductionBeat(BaseModel):
+    id: str
+    title: str
+    payoff: str
+    requirements: DeductionRequirements = Field(default_factory=DeductionRequirements)
+    effects: TriggerEffects = Field(default_factory=TriggerEffects)
+    objective: str | None = None
+
+
+class DeductionMessage(BaseModel):
+    id: str
+    title: str
+    message: str
+    objective: str | None = None
+    unlocked_documents: list[str] = Field(default_factory=list)
+    unlocked_suspects: list[str] = Field(default_factory=list)
+
+
 class CaseConfig(BaseModel):
     id: str
     title: str
@@ -79,6 +105,7 @@ class CaseConfig(BaseModel):
     rescan_rules: list[RescanRule] = Field(default_factory=list)
     submission: SubmissionConfig
     valid_board_links: list[BoardLinkDefinition] = Field(default_factory=list)
+    deduction_beats: list[DeductionBeat] = Field(default_factory=list)
 
 
 class PublicProfile(BaseModel):
@@ -167,6 +194,7 @@ class PlayerCaseState(BaseModel):
     unlocked_suspect_ids: list[str] = Field(default_factory=list)
     pinned_evidence_ids: list[str] = Field(default_factory=list)
     board_links: list[str] = Field(default_factory=list)
+    completed_deduction_ids: list[str] = Field(default_factory=list)
     rescan_history: list[str] = Field(default_factory=list)
     discovered_contexts: list[str] = Field(default_factory=list)
     current_objective: str = "Review the police archive and find the missing pattern."
@@ -206,6 +234,7 @@ class SearchResponse(BaseModel):
     query: str
     results: list[SearchResult]
     discovered_contexts: list[str] = Field(default_factory=list)
+    deduction_messages: list[DeductionMessage] = Field(default_factory=list)
 
 
 class RescanRequest(BaseModel):
@@ -220,6 +249,7 @@ class RescanResponse(BaseModel):
     unlocked_suspects: list[str] = Field(default_factory=list)
     surfaced_results: list[SearchResult] = Field(default_factory=list)
     discovered_contexts: list[str] = Field(default_factory=list)
+    deduction_messages: list[DeductionMessage] = Field(default_factory=list)
 
 
 class TalkRequest(BaseModel):
@@ -235,6 +265,7 @@ class DialogueResponse(BaseModel):
     unlocked_documents: list[str] = Field(default_factory=list)
     unlocked_suspects: list[str] = Field(default_factory=list)
     lead_messages: list[str] = Field(default_factory=list)
+    deduction_messages: list[DeductionMessage] = Field(default_factory=list)
     suspicion_level: int
     conversation: ConversationState
 
@@ -254,9 +285,11 @@ class BoardLinkRequest(BaseModel):
 class BoardLinkResponse(BaseModel):
     is_valid: bool
     link_id: str
+    confirmed_note: str = ""
     unlocked_documents: list[str] = Field(default_factory=list)
     unlocked_suspects: list[str] = Field(default_factory=list)
     board_links: list[str] = Field(default_factory=list)
+    deduction_messages: list[DeductionMessage] = Field(default_factory=list)
 
 
 class TogglePinRequest(BaseModel):
@@ -309,6 +342,7 @@ class CaseDetailResponse(BaseModel):
     suspects: list[PublicSuspect]
     documents: list[CaseDocument]
     state: PlayerCaseState
+    completed_deductions: list[DeductionMessage] = Field(default_factory=list)
 
 
 class AssetEntry(BaseModel):
@@ -508,6 +542,16 @@ class LoadedCase:
             if sid in self.suspects
         ]
         documents = [self.documents[did] for did in state.unlocked_document_ids if did in self.documents]
+        completed_deductions = [
+            DeductionMessage(
+                id=beat.id,
+                title=beat.title,
+                message=beat.payoff,
+                objective=beat.objective,
+            )
+            for beat in self.config.deduction_beats
+            if beat.id in state.completed_deduction_ids
+        ]
         return CaseDetailResponse(
             case=self.summary(),
             police_summary=self.config.police_summary,
@@ -517,6 +561,7 @@ class LoadedCase:
             suspects=suspects,
             documents=documents,
             state=state,
+            completed_deductions=completed_deductions,
         )
 
 

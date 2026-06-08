@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   type Edge,
   type Node,
@@ -51,7 +51,7 @@ function toFlowEdges(boardLinks: string[]): Edge[] {
 }
 
 export default function BoardView({ caseDetail, saveState, boardNodes, onBoardLink }: Props) {
-  const [nodes, , onNodesChange] = useNodesState(toFlowNodes(boardNodes));
+  const [nodes, setNodes, onNodesChange] = useNodesState(toFlowNodes(boardNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(toFlowEdges(saveState.board_links));
 
   const [boardSource, setBoardSource] = useState(boardNodes[0]?.id ?? '');
@@ -63,6 +63,14 @@ export default function BoardView({ caseDetail, saveState, boardNodes, onBoardLi
   const motivePct = Math.min(100, 22 + saveState.discovered_contexts.length * 7);
   const meansPct = Math.min(100, 18 + saveState.pinned_evidence_ids.length * 12);
   const truthPct = Math.min(100, 20 + saveState.board_links.length * 11);
+
+  useEffect(() => {
+    setNodes(toFlowNodes(boardNodes));
+  }, [boardNodes, setNodes]);
+
+  useEffect(() => {
+    setEdges(toFlowEdges(saveState.board_links));
+  }, [saveState.board_links, setEdges]);
 
   const handleValidate = useCallback(async () => {
     try {
@@ -81,7 +89,7 @@ export default function BoardView({ caseDetail, saveState, boardNodes, onBoardLi
       ]);
       setBoardFeedback(
         response.is_valid
-          ? 'Added to your board. Use interrogation or a focused rescan to test this theory.'
+          ? response.deduction_messages[0]?.message || response.confirmed_note || 'Confirmed link added to your board.'
           : 'Added as a tentative theory. The board is for organizing your thinking, not unlocking content.',
       );
     } catch (e) {
@@ -161,7 +169,7 @@ export default function BoardView({ caseDetail, saveState, boardNodes, onBoardLi
             </div>
             <div className="board-links">
               {saveState.board_links.map((link) => (
-                <div key={link} className="board-link-card">{link}</div>
+                <div key={link} className="board-link-card">{link.replace(/-/g, ' ')}</div>
               ))}
             </div>
           </section>

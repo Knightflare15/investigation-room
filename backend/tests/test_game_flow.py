@@ -77,6 +77,52 @@ class GameFlowTests(unittest.TestCase):
         self.assertEqual(response.link_id, "victim-hotel-ledger-secret-meeting")
         self.assertEqual(response.unlocked_suspects, [])
 
+    def test_board_link_completes_authored_deduction_when_requirements_are_met(self) -> None:
+        self.game.rescan_case(
+            "case-001",
+            self.alias,
+            RescanRequest(focus="Ashdown Suite", location_id="loc_ashdown_hotel"),
+        )
+        response = self.game.add_board_link(
+            "case-001",
+            self.alias,
+            BoardLinkRequest(
+                source_id="victim",
+                target_id="doc_hotel_ledger",
+                link_type="secret-meeting",
+            ),
+        )
+        self.assertTrue(response.is_valid)
+        self.assertEqual([message.id for message in response.deduction_messages], ["deduce-suite-booking"])
+        state = self.game.get_or_create_state("case-001", self.alias)
+        self.assertIn("deduce-suite-booking", state.completed_deduction_ids)
+        self.assertIn("private suite", response.deduction_messages[0].message.lower())
+
+    def test_deduction_does_not_fire_twice(self) -> None:
+        self.game.rescan_case(
+            "case-001",
+            self.alias,
+            RescanRequest(focus="Ashdown Suite", location_id="loc_ashdown_hotel"),
+        )
+        first = self.game.add_board_link(
+            "case-001",
+            self.alias,
+            BoardLinkRequest(source_id="victim", target_id="doc_hotel_ledger", link_type="secret-meeting"),
+        )
+        second = self.game.add_board_link(
+            "case-001",
+            self.alias,
+            BoardLinkRequest(source_id="victim", target_id="doc_hotel_ledger", link_type="secret-meeting"),
+        )
+        self.assertEqual(len(first.deduction_messages), 1)
+        self.assertEqual(second.deduction_messages, [])
+
+    def test_search_can_complete_contextual_deduction(self) -> None:
+        response = self.game.search_case("case-001", self.alias, SearchRequest(query="sedative microdose timeline", limit=4))
+        self.assertIn("deduce-sedative-pattern", [message.id for message in response.deduction_messages])
+        state = self.game.get_or_create_state("case-001", self.alias)
+        self.assertIn("deduce-sedative-pattern", state.completed_deduction_ids)
+
     def test_theory_submission_updates_stats(self) -> None:
         self.game.get_or_create_state("case-001", self.alias)
         response = self.game.submit_theory(
@@ -113,6 +159,7 @@ class GameFlowTests(unittest.TestCase):
         self.assertEqual(restarted.state.unlocked_suspect_ids, initial_state.initial_suspect_ids)
         self.assertEqual(restarted.state.pinned_evidence_ids, [])
         self.assertEqual(restarted.state.board_links, [])
+        self.assertEqual(restarted.state.completed_deduction_ids, [])
         self.assertEqual(restarted.state.rescan_history, [])
         self.assertEqual(restarted.conversations, [])
         stats = self.game.get_community_stats("case-001", self.alias)

@@ -132,6 +132,60 @@
       "notes": "Call traffic implies Mara was hiding a business crisis."
     }
   ],
+  "deduction_beats": [
+    {
+      "id": "deduce-suite-booking",
+      "title": "Suite Booking Proven",
+      "payoff": "You proved the private suite was not routine hotel noise: the ledger ties Room 402, the Ashdown Suite alias, and Bell's initials to the same window as Vale's disappearance.",
+      "requirements": {
+        "document_ids": ["doc_hotel_ledger"],
+        "board_link_ids": ["victim-hotel-ledger-secret-meeting"]
+      },
+      "objective": "Use the confirmed suite booking to press Bell about Lena Orlov or rescan the Harbor Office lead."
+    },
+    {
+      "id": "deduce-lena-enters-case",
+      "title": "Lena Orlov Enters the Case",
+      "payoff": "Lena Orlov is no longer just a name in the margins. The witness account and suite lead put her near the hidden meeting, making her a live person of interest.",
+      "requirements": {
+        "context_values": ["Lena Orlov"]
+      },
+      "effects": {
+        "unlock_suspect_ids": ["sus_lena"],
+        "surface_document_ids": ["doc_witness_anna"]
+      },
+      "objective": "Bring Lena Orlov into interrogation and compare her story against the suite ledger."
+    },
+    {
+      "id": "deduce-harbor-office-pressure",
+      "title": "Harbor Office Pressure",
+      "payoff": "The Harbor Office is now a pressure point, not background flavor. It connects Mara's private contact with Vale to the unfinished follow-up memo.",
+      "requirements": {
+        "document_ids": ["doc_detective_supplement"],
+        "context_values": ["Harbor Office"]
+      },
+      "objective": "Use the Harbor Office thread to pressure Mara about her calendar and the business fallout."
+    },
+    {
+      "id": "deduce-call-chain",
+      "title": "Call Chain Recovered",
+      "payoff": "The recovered call log creates a clean chain: Lena called Vale, Vale called Mara, and Harbor Office reception tried to reach him before the collapse window.",
+      "requirements": {
+        "document_ids": ["doc_call_log"]
+      },
+      "objective": "Pin the call log and test whether Mara, Lena, or Bell has the weakest explanation for the timing."
+    },
+    {
+      "id": "deduce-sedative-pattern",
+      "title": "Sedative Pattern Confirmed",
+      "payoff": "The autopsy makes the death feel less like a sudden attack and more like a timed setup. The collapse window should be tested against every claimed location.",
+      "requirements": {
+        "document_ids": ["doc_autopsy"],
+        "context_values": ["sedative"]
+      },
+      "objective": "Pressure Ellis about the sedative question, then compare his answer against the timeline."
+    }
+  ],
   "submission": {
     "required_fields": ["culprit_id", "motive_text", "timeline_text", "evidence_ids"],
     "min_evidence_count": 3

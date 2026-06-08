@@ -1,5 +1,5 @@
 import type { FormEvent } from 'react';
-import type { CaseDetailResponse, CaseDocument, PlayerCaseState, RescanResponse, SearchResult } from '../types';
+import type { CaseDetailResponse, CaseDocument, DeductionMessage, PlayerCaseState, RescanResponse, SearchResult } from '../types';
 import { MediaPlate, PanelHeader } from '../ui';
 
 type Props = {
@@ -14,6 +14,7 @@ type Props = {
   searchQuery: string;
   onSearchQueryChange: (q: string) => void;
   searchResults: SearchResult[];
+  deductionMessages: DeductionMessage[];
   rescanResults: RescanResponse | null;
   onSearch: (event: FormEvent) => Promise<void>;
   onRescan: () => Promise<void>;
@@ -47,6 +48,7 @@ export default function ArchiveView({
   searchQuery,
   onSearchQueryChange,
   searchResults,
+  deductionMessages,
   rescanResults,
   onSearch,
   onRescan,
@@ -188,6 +190,23 @@ export default function ArchiveView({
               ))}
             </div>
           </section>
+
+          {deductionMessages.length ? (
+            <section className="intel-card">
+              <div className="intel-card-header">
+                <span>Deductions</span>
+                <strong>{deductionMessages.length.toString().padStart(2, '0')}</strong>
+              </div>
+              <div className="intel-list">
+                {deductionMessages.map((deduction) => (
+                  <div key={deduction.id} className="intel-row">
+                    <strong>{deduction.title}</strong>
+                    <span>{deduction.message}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <section className="intel-card">
             <div className="intel-card-header">

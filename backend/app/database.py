@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS player_case_states (
     unlocked_suspect_ids JSONB NOT NULL,
     pinned_evidence_ids JSONB NOT NULL,
     board_links JSONB NOT NULL,
+    completed_deduction_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     rescan_history JSONB NOT NULL,
     discovered_contexts JSONB NOT NULL,
     current_objective TEXT NOT NULL,
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS player_case_states (
     unlocked_suspect_ids TEXT NOT NULL,
     pinned_evidence_ids TEXT NOT NULL,
     board_links TEXT NOT NULL,
+    completed_deduction_ids TEXT NOT NULL DEFAULT '[]',
     rescan_history TEXT NOT NULL,
     discovered_contexts TEXT NOT NULL,
     current_objective TEXT NOT NULL,
@@ -123,6 +125,15 @@ def _row_value(row: Any, key: str) -> Any:
     return row[key]
 
 
+def _row_value_or(row: Any, key: str, default: Any) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
+
+
 def _state_from_row(player_alias: str, case_id: str, row: Any) -> PlayerCaseState:
     return PlayerCaseState(
         player_alias=player_alias,
@@ -132,6 +143,7 @@ def _state_from_row(player_alias: str, case_id: str, row: Any) -> PlayerCaseStat
         unlocked_suspect_ids=_load_json(_row_value(row, "unlocked_suspect_ids")),
         pinned_evidence_ids=_load_json(_row_value(row, "pinned_evidence_ids")),
         board_links=_load_json(_row_value(row, "board_links")),
+        completed_deduction_ids=_load_json(_row_value_or(row, "completed_deduction_ids", "[]")),
         rescan_history=_load_json(_row_value(row, "rescan_history")),
         discovered_contexts=_load_json(_row_value(row, "discovered_contexts")),
         current_objective=_row_value(row, "current_objective"),
@@ -189,14 +201,16 @@ class BaseDatabase(ABC):
             INSERT INTO player_case_states (
                 case_id, player_alias, suspicion_level, unlocked_document_ids,
                 unlocked_suspect_ids, pinned_evidence_ids, board_links,
-                rescan_history, discovered_contexts, current_objective
-            ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+                completed_deduction_ids, rescan_history, discovered_contexts,
+                current_objective
+            ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
             ON CONFLICT(case_id, player_alias) DO UPDATE SET
                 suspicion_level = {self._excluded}suspicion_level,
                 unlocked_document_ids = {self._excluded}unlocked_document_ids,
                 unlocked_suspect_ids = {self._excluded}unlocked_suspect_ids,
                 pinned_evidence_ids = {self._excluded}pinned_evidence_ids,
                 board_links = {self._excluded}board_links,
+                completed_deduction_ids = {self._excluded}completed_deduction_ids,
                 rescan_history = {self._excluded}rescan_history,
                 discovered_contexts = {self._excluded}discovered_contexts,
                 current_objective = {self._excluded}current_objective,
@@ -210,6 +224,7 @@ class BaseDatabase(ABC):
                 self._json(state.unlocked_suspect_ids),
                 self._json(state.pinned_evidence_ids),
                 self._json(state.board_links),
+                self._json(state.completed_deduction_ids),
                 self._json(state.rescan_history),
                 self._json(state.discovered_contexts),
                 state.current_objective,
@@ -391,6 +406,14 @@ class SQLiteDatabase(BaseDatabase):
     def _init_schema(self) -> None:
         with self._connection() as connection:
             connection.executescript(SQLITE_SCHEMA)
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(player_case_states)").fetchall()
+            }
+            if "completed_deduction_ids" not in columns:
+                connection.execute(
+                    "ALTER TABLE player_case_states ADD COLUMN completed_deduction_ids TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def _execute(self, sql: str, params: tuple = ()) -> list[Any]:
         with self._connection() as connection:
@@ -431,6 +454,9 @@ class PostgresDatabase(BaseDatabase):
         with self._connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(POSTGRES_SCHEMA)
+                cursor.execute(
+                    "ALTER TABLE player_case_states ADD COLUMN IF NOT EXISTS completed_deduction_ids JSONB NOT NULL DEFAULT '[]'::jsonb"
+                )
 
     def _execute(self, sql: str, params: tuple = ()) -> list[Any]:
         with self._connection() as connection:

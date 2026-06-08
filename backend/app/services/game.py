@@ -13,6 +13,7 @@ from ..models import (
     ConfrontRequest,
     ConversationState,
     ConversationTurn,
+    DeductionMessage,
     DialogueResponse,
     LoadedCase,
     PlayerCaseState,
@@ -46,7 +47,7 @@ class GameService:
         self.cases = load_cases(settings.cases_path)
         self.retrieval = RetrievalService(settings)
         self.dialogue = DialogueService(settings, self.retrieval)
-        self._stream_lead_events: dict[tuple[str, str, str], dict[str, list[str]]] = {}
+        self._stream_lead_events: dict[tuple[str, str, str], dict[str, object]] = {}
 
     def _build_lead_messages(
         self,
@@ -69,11 +70,66 @@ class GameService:
             messages.append(f"Lead surfaced: {label} can now be called in after {context_hint} came up.")
         return messages
 
-    def pop_stream_lead_event(self, case_id: str, player_alias: str, suspect_id: str) -> dict[str, list[str]]:
+    def pop_stream_lead_event(self, case_id: str, player_alias: str, suspect_id: str) -> dict[str, object]:
         return self._stream_lead_events.pop(
             (case_id, player_alias, suspect_id),
-            {"unlocked_documents": [], "unlocked_suspects": [], "lead_messages": []},
+            {"unlocked_documents": [], "unlocked_suspects": [], "lead_messages": [], "deduction_messages": []},
         )
+
+    def _evaluate_deductions(
+        self,
+        state: PlayerCaseState,
+        case: LoadedCase,
+        conversations: list[ConversationState] | None = None,
+    ) -> list[DeductionMessage]:
+        if not case.config.deduction_beats:
+            return []
+        conversations = conversations if conversations is not None else self.db.load_conversations(state.case_id, state.player_alias)
+        revealed_fact_ids = {
+            fact_id
+            for conversation in conversations
+            for fact_id in conversation.revealed_fact_ids
+        }
+        messages: list[DeductionMessage] = []
+        for beat in case.config.deduction_beats:
+            if beat.id in state.completed_deduction_ids:
+                continue
+            requirements = beat.requirements
+            if any(document_id not in state.unlocked_document_ids for document_id in requirements.document_ids):
+                continue
+            if any(suspect_id not in state.unlocked_suspect_ids for suspect_id in requirements.suspect_ids):
+                continue
+            if any(link_id not in state.board_links for link_id in requirements.board_link_ids):
+                continue
+            if any(context not in state.discovered_contexts for context in requirements.context_values):
+                continue
+            if any(fact_id not in revealed_fact_ids for fact_id in requirements.revealed_fact_ids):
+                continue
+
+            unlocked_documents: list[str] = []
+            unlocked_suspects: list[str] = []
+            for document_id in beat.effects.unlock_document_ids:
+                if document_id not in state.unlocked_document_ids:
+                    state.unlocked_document_ids.append(document_id)
+                    unlocked_documents.append(document_id)
+            for suspect_id in beat.effects.unlock_suspect_ids:
+                if suspect_id not in state.unlocked_suspect_ids:
+                    state.unlocked_suspect_ids.append(suspect_id)
+                    unlocked_suspects.append(suspect_id)
+            state.completed_deduction_ids.append(beat.id)
+            if beat.objective:
+                state.current_objective = beat.objective
+            messages.append(
+                DeductionMessage(
+                    id=beat.id,
+                    title=beat.title,
+                    message=beat.payoff,
+                    objective=beat.objective,
+                    unlocked_documents=unlocked_documents,
+                    unlocked_suspects=unlocked_suspects,
+                )
+            )
+        return messages
 
     def reload_cases(self) -> None:
         new_cases = load_cases(self.settings.cases_path)
@@ -152,8 +208,14 @@ class GameService:
         for context in contexts:
             if context not in state.discovered_contexts:
                 state.discovered_contexts.append(context)
+        deduction_messages = self._evaluate_deductions(state, case)
         self.db.save_player_state(state)
-        return SearchResponse(query=payload.query, results=results, discovered_contexts=contexts)
+        return SearchResponse(
+            query=payload.query,
+            results=results,
+            discovered_contexts=contexts,
+            deduction_messages=deduction_messages,
+        )
 
     def _apply_rule_effects(
         self,
@@ -255,6 +317,7 @@ class GameService:
         )
         state.rescan_history.append(payload.focus or "Rescan run")
         state.current_objective = "Use the rescan result to pressure a suspect or chase a more specific archive lead."
+        deduction_messages = self._evaluate_deductions(state, case)
         self.db.save_player_state(state)
         return RescanResponse(
             focus=payload.focus,
@@ -263,6 +326,7 @@ class GameService:
             unlocked_suspects=unlocked_suspects,
             surfaced_results=surfaced_results,
             discovered_contexts=state.discovered_contexts,
+            deduction_messages=deduction_messages,
         )
 
     def _get_conversation(self, case_id: str, player_alias: str, suspect_id: str) -> ConversationState:
@@ -382,6 +446,22 @@ class GameService:
         if effects.unlocked_suspects:
             state.current_objective = "A new person of interest has surfaced. Bring them in or revisit the archive."
         lead_messages = self._build_lead_messages(case, effects, all_contexts)
+        stored_conversations = [
+            existing
+            for existing in self.db.load_conversations(case_id, player_alias)
+            if existing.suspect_id != conversation.suspect_id
+        ]
+        deduction_messages = self._evaluate_deductions(state, case, [*stored_conversations, conversation])
+        deduction_unlocked_documents = [
+            document_id
+            for message in deduction_messages
+            for document_id in message.unlocked_documents
+        ]
+        deduction_unlocked_suspects = [
+            suspect_id
+            for message in deduction_messages
+            for suspect_id in message.unlocked_suspects
+        ]
 
         self._save_conversation(case_id, player_alias, conversation)
         self.db.save_player_state(state)
@@ -391,9 +471,10 @@ class GameService:
             new_context=outcome.new_context,
             revealed_fact_ids=outcome.revealed_fact_ids,
             grounding_results=grounding_results,
-            unlocked_documents=effects.unlocked_documents,
-            unlocked_suspects=effects.unlocked_suspects,
+            unlocked_documents=list(dict.fromkeys(effects.unlocked_documents + deduction_unlocked_documents)),
+            unlocked_suspects=list(dict.fromkeys(effects.unlocked_suspects + deduction_unlocked_suspects)),
             lead_messages=lead_messages,
+            deduction_messages=deduction_messages,
             suspicion_level=state.suspicion_level,
             conversation=conversation,
         )
@@ -460,12 +541,29 @@ class GameService:
         state.current_objective = "Rescan the archive with what you just learned."
         if effects.unlocked_suspects:
             state.current_objective = "A new person of interest has surfaced. Bring them in or revisit the archive."
+        stored_conversations = [
+            existing
+            for existing in self.db.load_conversations(case_id, player_alias)
+            if existing.suspect_id != conversation.suspect_id
+        ]
+        deduction_messages = self._evaluate_deductions(state, case, [*stored_conversations, conversation])
+        deduction_unlocked_documents = [
+            document_id
+            for message in deduction_messages
+            for document_id in message.unlocked_documents
+        ]
+        deduction_unlocked_suspects = [
+            suspect_id
+            for message in deduction_messages
+            for suspect_id in message.unlocked_suspects
+        ]
         self._save_conversation(case_id, player_alias, conversation)
         self.db.save_player_state(state)
         self._stream_lead_events[(case_id, player_alias, suspect_id)] = {
-            "unlocked_documents": effects.unlocked_documents,
-            "unlocked_suspects": effects.unlocked_suspects,
+            "unlocked_documents": list(dict.fromkeys(effects.unlocked_documents + deduction_unlocked_documents)),
+            "unlocked_suspects": list(dict.fromkeys(effects.unlocked_suspects + deduction_unlocked_suspects)),
             "lead_messages": self._build_lead_messages(case, effects, all_contexts),
+            "deduction_messages": [message.model_dump(mode="json") for message in deduction_messages],
         }
 
     def confront_suspect(self, case_id: str, player_alias: str, suspect_id: str, request: ConfrontRequest) -> DialogueResponse:
@@ -495,13 +593,26 @@ class GameService:
 
         is_valid = matched_link is not None
         state.current_objective = "Use the board to organize your theory, then test it through interrogation or a focused rescan."
+        deduction_messages = self._evaluate_deductions(state, case)
+        deduction_unlocked_documents = [
+            document_id
+            for message in deduction_messages
+            for document_id in message.unlocked_documents
+        ]
+        deduction_unlocked_suspects = [
+            suspect_id
+            for message in deduction_messages
+            for suspect_id in message.unlocked_suspects
+        ]
         self.db.save_player_state(state)
         return BoardLinkResponse(
             is_valid=is_valid,
             link_id=link_id,
-            unlocked_documents=[],
-            unlocked_suspects=[],
+            confirmed_note=matched_link.notes if matched_link else "",
+            unlocked_documents=deduction_unlocked_documents,
+            unlocked_suspects=deduction_unlocked_suspects,
             board_links=state.board_links,
+            deduction_messages=deduction_messages,
         )
 
     def toggle_pin(self, case_id: str, player_alias: str, payload: TogglePinRequest) -> PlayerCaseState:

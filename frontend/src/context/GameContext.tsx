@@ -8,6 +8,7 @@ import type {
   ContradictionItem,
   ConversationState,
   ConversationTurn,
+  DeductionMessage,
   PlayerCaseState,
   RescanResponse,
   SearchResult,
@@ -40,6 +41,8 @@ export type GameState = {
   searchResults: SearchResult[];
   lastGroundingResults: SearchResult[];
   leadMessages: string[];
+  deductionMessages: DeductionMessage[];
+  completedDeductions: DeductionMessage[];
   rescanResults: RescanResponse | null;
   communityStats: CommunityStatsResponse | null;
   mediaPreview: MediaPreview | null;
@@ -80,6 +83,7 @@ export type GameAction =
   | { type: 'SET_SEARCH_RESULTS'; payload: SearchResult[] }
   | { type: 'SET_LAST_GROUNDING_RESULTS'; payload: SearchResult[] }
   | { type: 'SET_LEAD_MESSAGES'; payload: string[] }
+  | { type: 'SET_DEDUCTION_MESSAGES'; payload: DeductionMessage[] }
   | { type: 'SET_RESCAN_RESULTS'; payload: RescanResponse }
   | { type: 'CLEAR_RESCAN_RESULTS' }
   | { type: 'SET_MEDIA_PREVIEW'; payload: MediaPreview | null }
@@ -112,6 +116,8 @@ const initialState: GameState = {
   searchResults: [],
   lastGroundingResults: [],
   leadMessages: [],
+  deductionMessages: [],
+  completedDeductions: [],
   rescanResults: null,
   communityStats: null,
   mediaPreview: null,
@@ -166,6 +172,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         searchResults: [],
         lastGroundingResults: [],
         leadMessages: [],
+        deductionMessages: [],
+        completedDeductions: [],
         rescanResults: null,
         communityStats: null,
         unlockedSuspects: [],
@@ -185,6 +193,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         selectedDocumentId: '',
         selectedLocationId: '',
         leadMessages: [],
+        deductionMessages: [],
       };
     case 'SET_SELECTED_SUSPECT':
       return { ...state, selectedSuspectId: action.payload };
@@ -227,6 +236,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         ...state,
         caseDetail: detail,
         lastGroundingResults: [],
+        completedDeductions: detail.completed_deductions,
         unlockedSuspects,
         boardNodes,
         folderCounts,
@@ -241,22 +251,32 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const unlockedDocuments = state.caseDetail?.documents ?? [];
       const pinnedDocuments = unlockedDocuments.filter((d) => ss.pinned_evidence_ids.includes(d.id));
       const seeds = ss.discovered_contexts;
-      const contradictionItems: ContradictionItem[] = seeds
-        .slice(-4)
-        .reverse()
-        .map((context, index) => ({
-          title:
-            index === 0
-              ? `Fresh inconsistency around ${context}`
-              : index === 1
-                ? `${context} keeps resurfacing in separate accounts`
-                : `${context} may connect two statements that should not align`,
-          severity: (index === 0 ? 'high' : index === 1 ? 'medium' : 'low') as ContradictionItem['severity'],
-          source:
-            index === 0
-              ? 'Derived from interrogation and archive cross-checks'
-              : 'Pulled from rescan context and evidence overlap',
-        }));
+      const completed = state.caseDetail?.completed_deductions ?? state.completedDeductions;
+      const contradictionItems: ContradictionItem[] = completed.length
+        ? completed
+            .slice(-4)
+            .reverse()
+            .map((deduction, index) => ({
+              title: deduction.title,
+              severity: (index === 0 ? 'high' : index === 1 ? 'medium' : 'low') as ContradictionItem['severity'],
+              source: deduction.message,
+            }))
+        : seeds
+            .slice(-4)
+            .reverse()
+            .map((context, index) => ({
+              title:
+                index === 0
+                  ? `Fresh inconsistency around ${context}`
+                  : index === 1
+                    ? `${context} keeps resurfacing in separate accounts`
+                    : `${context} may connect two statements that should not align`,
+              severity: (index === 0 ? 'high' : index === 1 ? 'medium' : 'low') as ContradictionItem['severity'],
+              source:
+                index === 0
+                  ? 'Derived from interrogation and archive cross-checks'
+                  : 'Pulled from rescan context and evidence overlap',
+            }));
       return {
         ...state,
         saveState: ss,
@@ -287,7 +307,11 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         text: `Conversation breakthrough recorded under ${factId}.`,
         type: 'mindset' as ClueCard['type'],
       }));
-      const clueCards = [...tagClues, ...revealed].slice(0, 4);
+      const deductionClues = state.completedDeductions.slice(-2).map((deduction) => ({
+        text: deduction.message,
+        type: 'mindset' as ClueCard['type'],
+      }));
+      const clueCards = [...deductionClues, ...tagClues, ...revealed].slice(0, 4);
       const base = selectedDocument?.entity_tags?.slice(0, 4) ?? [];
       const followUpPrompts = base.length
         ? base.map((tag) => `Ask about ${tag}`)
@@ -308,6 +332,15 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...state, lastGroundingResults: action.payload };
     case 'SET_LEAD_MESSAGES':
       return { ...state, leadMessages: action.payload };
+    case 'SET_DEDUCTION_MESSAGES': {
+      const nextCompleted = [...state.completedDeductions];
+      for (const deduction of action.payload) {
+        if (!nextCompleted.some((existing) => existing.id === deduction.id)) {
+          nextCompleted.push(deduction);
+        }
+      }
+      return { ...state, deductionMessages: action.payload, completedDeductions: nextCompleted };
+    }
     case 'SET_RESCAN_RESULTS':
       return { ...state, rescanResults: action.payload };
     case 'CLEAR_RESCAN_RESULTS':

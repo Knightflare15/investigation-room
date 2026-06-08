@@ -10,6 +10,8 @@ from ..models import (
     CaseBriefInput,
     CaseConfig,
     CaseDocument,
+    DeductionBeat,
+    DeductionRequirements,
     EvidenceDraft,
     ExtractedCaseDraft,
     ExtractedSuspectDraft,
@@ -149,6 +151,7 @@ class BriefGenerationService:
         locations = self._build_locations(extracted, documents)
         rescan_rules = self._build_rescan_rules(extracted, suspect_configs, documents, locations)
         board_links = self._build_board_links(extracted, suspect_configs, documents)
+        deduction_beats = self._build_deduction_beats(extracted, suspect_configs, documents, board_links)
 
         case_config = CaseConfig(
             id=extracted.case_id,
@@ -174,6 +177,7 @@ class BriefGenerationService:
                 min_evidence_count=min(3, max(2, len(initial_documents))),
             ),
             valid_board_links=board_links,
+            deduction_beats=deduction_beats,
         )
 
         prompts = {
@@ -502,6 +506,115 @@ class BriefGenerationService:
                 notes=f"{culprit.display_name} has a motive thread tied to {target_doc.title}.",
             ),
         ]
+
+    def _build_deduction_beats(
+        self,
+        extracted: ExtractedCaseDraft,
+        suspects: list[SuspectConfig],
+        documents: list[CaseDocument],
+        board_links: list[BoardLinkDefinition],
+    ) -> list[DeductionBeat]:
+        culprit = next(
+            (suspect for suspect in suspects if suspect.display_name.lower() == extracted.culprit_name.lower()),
+            suspects[0],
+        )
+        beats: list[DeductionBeat] = []
+        hidden_documents = [document for document in documents if document.unlock_rule]
+        primary_hidden = hidden_documents[0] if hidden_documents else None
+        primary_link = board_links[0] if board_links else None
+        culprit_link = next((link for link in board_links if link.source_id == culprit.id), None)
+
+        if primary_hidden and primary_link:
+            beats.append(
+                DeductionBeat(
+                    id=f"deduce-{_slugify(primary_hidden.title)}",
+                    title=f"{primary_hidden.title} Proven",
+                    payoff=(
+                        f"You proved {primary_hidden.title} matters to the hidden thread: "
+                        f"{primary_link.notes}"
+                    ),
+                    requirements=DeductionRequirements(
+                        document_ids=[primary_hidden.id],
+                        board_link_ids=[primary_link.id],
+                    ),
+                    objective=f"Use {primary_hidden.title} to pressure the suspect with the weakest explanation.",
+                )
+            )
+
+        if culprit_link:
+            linked_doc = next((document for document in documents if document.id == culprit_link.target_id), primary_hidden)
+            requirements = DeductionRequirements(
+                board_link_ids=[culprit_link.id],
+                suspect_ids=[culprit.id],
+            )
+            if linked_doc:
+                requirements.document_ids = [linked_doc.id]
+            beats.append(
+                DeductionBeat(
+                    id=f"deduce-{_slugify(culprit.display_name)}-motive",
+                    title=f"{culprit.display_name} Motive Thread",
+                    payoff=(
+                        f"Your board now ties {culprit.display_name} to a concrete motive thread. "
+                        f"{culprit_link.notes}"
+                    ),
+                    requirements=requirements,
+                    objective=f"Press {culprit.display_name} with the linked evidence and compare the answer against the timeline.",
+                )
+            )
+
+        context_doc = next(
+            (
+                document
+                for document in documents
+                if document.entity_tags and document.id != (primary_hidden.id if primary_hidden else "")
+            ),
+            documents[0] if documents else None,
+        )
+        if context_doc and context_doc.entity_tags:
+            context = context_doc.entity_tags[0]
+            beats.append(
+                DeductionBeat(
+                    id=f"deduce-{_slugify(context)}-context",
+                    title=f"{context} Becomes Relevant",
+                    payoff=(
+                        f"{context} is no longer just a search term. It connects directly to {context_doc.title} "
+                        "and should be tested against the suspects' statements."
+                    ),
+                    requirements=DeductionRequirements(
+                        document_ids=[context_doc.id],
+                        context_values=[context],
+                    ),
+                    objective=f"Use {context} as a focused rescan or interrogation pressure point.",
+                )
+            )
+
+        if extracted.hidden_truth:
+            truth_doc = next(
+                (document for document in documents if document.doc_type in {"forensic_report", "communications_log"}),
+                documents[-1] if documents else None,
+            )
+            if truth_doc:
+                beats.append(
+                    DeductionBeat(
+                        id="deduce-hidden-truth-pattern",
+                        title="Hidden Truth Pattern",
+                        payoff=(
+                            f"The evidence now supports the buried pattern: {extracted.hidden_truth[0]} "
+                            "Treat this as a theory anchor, not a loose clue."
+                        ),
+                        requirements=DeductionRequirements(document_ids=[truth_doc.id]),
+                        objective="Pin the strongest supporting evidence, then formalize the accusation when the timeline holds.",
+                    )
+                )
+
+        unique: list[DeductionBeat] = []
+        seen: set[str] = set()
+        for beat in beats:
+            if beat.id in seen:
+                continue
+            unique.append(beat)
+            seen.add(beat.id)
+        return unique[:4]
 
     def _build_domains(self) -> list[ArchiveDomain]:
         return [

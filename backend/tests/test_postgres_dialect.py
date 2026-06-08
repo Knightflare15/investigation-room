@@ -3,13 +3,18 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-import psycopg
-from psycopg.types.json import Jsonb
+try:
+    import psycopg
+    from psycopg.types.json import Jsonb
+except ImportError:  # pragma: no cover - exercised only when optional Postgres deps are absent
+    psycopg = None
+    Jsonb = None
 
 from backend.app.database import PostgresDatabase
 from backend.app.models import PlayerCaseState
 
 
+@unittest.skipIf(psycopg is None or Jsonb is None, "psycopg is not installed")
 class PostgresDialectTests(unittest.TestCase):
     """Exercise the BaseDatabase Postgres branch without a live server by mocking psycopg."""
 

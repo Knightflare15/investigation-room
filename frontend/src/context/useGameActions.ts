@@ -1,5 +1,5 @@
 import { API_BASE, api, authHeaders } from '../api';
-import type { BoardLinkResponse, SubmitTheoryResponse } from '../types';
+import type { BoardLinkResponse, DeductionMessage, SubmitTheoryResponse } from '../types';
 import { useGame } from './GameContext';
 
 export function useGameActions() {
@@ -149,6 +149,7 @@ export function useGameActions() {
     try {
       const response = await api.search(state.selectedCaseId, state.alias, state.searchQuery);
       dispatch({ type: 'SET_SEARCH_RESULTS', payload: response.results });
+      dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
       if (response.results[0]) dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: response.results[0].document_id });
       await refreshCaseState();
     } catch (e) {
@@ -166,6 +167,7 @@ export function useGameActions() {
         state.selectedLocationId,
       );
       dispatch({ type: 'SET_RESCAN_RESULTS', payload: response });
+      dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
       await refreshCaseState();
       if (response.unlocked_suspects[0]) dispatch({ type: 'SET_SELECTED_SUSPECT', payload: response.unlocked_suspects[0] });
       if (response.unlocked_documents[0]) dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: response.unlocked_documents[0] });
@@ -182,6 +184,7 @@ export function useGameActions() {
       dispatch({ type: 'UPDATE_CONVERSATION', payload: response.conversation });
       dispatch({ type: 'SET_LAST_GROUNDING_RESULTS', payload: response.grounding_results });
       dispatch({ type: 'SET_LEAD_MESSAGES', payload: response.lead_messages });
+      dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
       if (state.saveState) {
         dispatch({
           type: 'SET_SAVE_STATE',
@@ -246,8 +249,10 @@ export function useGameActions() {
               unlocked_documents: string[];
               unlocked_suspects: string[];
               lead_messages: string[];
+              deduction_messages: DeductionMessage[];
             };
             dispatch({ type: 'SET_LEAD_MESSAGES', payload: leadEvent.lead_messages });
+            dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: leadEvent.deduction_messages ?? [] });
             if (leadEvent.unlocked_suspects[0]) dispatch({ type: 'SET_SELECTED_SUSPECT', payload: leadEvent.unlocked_suspects[0] });
             if (leadEvent.unlocked_documents[0]) dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: leadEvent.unlocked_documents[0] });
             continue;
@@ -274,6 +279,7 @@ export function useGameActions() {
       dispatch({ type: 'UPDATE_CONVERSATION', payload: response.conversation });
       dispatch({ type: 'SET_LAST_GROUNDING_RESULTS', payload: response.grounding_results });
       dispatch({ type: 'SET_LEAD_MESSAGES', payload: response.lead_messages });
+      dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
       await refreshCaseState();
       if (response.unlocked_suspects[0]) dispatch({ type: 'SET_SELECTED_SUSPECT', payload: response.unlocked_suspects[0] });
       if (response.unlocked_documents[0]) dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: response.unlocked_documents[0] });
@@ -285,6 +291,7 @@ export function useGameActions() {
   async function handleBoardLink(source: string, target: string, linkType: string, notes: string): Promise<BoardLinkResponse> {
     if (!state.isAuthenticated || !state.selectedCaseId) throw new Error('No case selected');
     const response = await api.addBoardLink(state.selectedCaseId, state.alias, source, target, linkType, notes);
+    dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
     await refreshCaseState();
     return response;
   }

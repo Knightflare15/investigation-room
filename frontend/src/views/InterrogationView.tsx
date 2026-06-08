@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from 'react';
-import type { CaseDetailResponse, CaseDocument, ClueCard, ConversationState, PlayerCaseState, SearchResult, Suspect } from '../types';
+import type { CaseDetailResponse, CaseDocument, ClueCard, ConversationState, DeductionMessage, PlayerCaseState, SearchResult, Suspect } from '../types';
 import { MediaPlate, PanelHeader } from '../ui';
 
 type Props = {
@@ -11,6 +11,7 @@ type Props = {
   clueCards: ClueCard[];
   groundingResults: SearchResult[];
   leadMessages: string[];
+  deductionMessages: DeductionMessage[];
   followUpPrompts: string[];
   onTalk: (message: string) => Promise<void>;
   onConfront: (evidenceId: string, message: string) => Promise<void>;
@@ -25,6 +26,7 @@ export default function InterrogationView({
   clueCards,
   groundingResults,
   leadMessages,
+  deductionMessages,
   followUpPrompts,
   onTalk,
   onConfront,
@@ -166,6 +168,19 @@ export default function InterrogationView({
                     <div key={`${lead}-${index}`} className="intel-row">
                       <strong>Lead {index + 1}</strong>
                       <span>{lead}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {deductionMessages.length ? (
+              <div className="workspace-question new-leads-panel">
+                <p className="subheading">Deduction Confirmed</p>
+                <div className="intel-list">
+                  {deductionMessages.map((deduction) => (
+                    <div key={deduction.id} className="intel-row">
+                      <strong>{deduction.title}</strong>
+                      <span>{deduction.message}</span>
                     </div>
                   ))}
                 </div>

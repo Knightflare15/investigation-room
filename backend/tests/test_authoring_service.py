@@ -177,6 +177,18 @@ class AuthoringServiceTests(unittest.TestCase):
             self.assertTrue(response.bundle.documents)
             self.assertTrue(any(suspect.image_path == "suspects/template-suspect.svg" for suspect in response.bundle.suspects))
             self.assertTrue(any(document.image_path == "evidence/template-evidence.svg" for document in response.bundle.documents))
+            self.assertGreaterEqual(len(response.bundle.case.deduction_beats), 3)
+            self.assertTrue(
+                any(beat.requirements.board_link_ids for beat in response.bundle.case.deduction_beats),
+                "expected at least one generated deduction to depend on a board link",
+            )
+            referenced_documents = {
+                document_id
+                for beat in response.bundle.case.deduction_beats
+                for document_id in beat.requirements.document_ids
+            }
+            document_ids = {document.id for document in response.bundle.documents}
+            self.assertTrue(referenced_documents <= document_ids)
 
     def test_ingest_case_from_source_returns_grounded_draft_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -196,6 +208,8 @@ class AuthoringServiceTests(unittest.TestCase):
             self.assertTrue(any(grounding.method == "heuristic" for grounding in response.groundings))
             self.assertTrue(all(grounding.confidence in {"high", "medium", "fallback"} for grounding in response.groundings))
             self.assertTrue(any(grounding.generated_value for grounding in response.groundings))
+            self.assertGreaterEqual(len(response.bundle.case.deduction_beats), 3)
+            self.assertTrue(any(beat.payoff for beat in response.bundle.case.deduction_beats))
 
     def test_ingest_case_from_source_accepts_focus_section_for_targeted_regeneration(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

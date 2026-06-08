@@ -103,9 +103,19 @@ export type PlayerCaseState = {
   unlocked_suspect_ids: string[];
   pinned_evidence_ids: string[];
   board_links: string[];
+  completed_deduction_ids: string[];
   rescan_history: string[];
   discovered_contexts: string[];
   current_objective: string;
+};
+
+export type DeductionMessage = {
+  id: string;
+  title: string;
+  message: string;
+  objective?: string | null;
+  unlocked_documents: string[];
+  unlocked_suspects: string[];
 };
 
 export type ConversationTurn = {
@@ -132,6 +142,7 @@ export type CaseDetailResponse = {
   suspects: Suspect[];
   documents: CaseDocument[];
   state: PlayerCaseState;
+  completed_deductions: DeductionMessage[];
 };
 
 export type SaveStateResponse = {
@@ -153,6 +164,7 @@ export type SearchResponse = {
   query: string;
   results: SearchResult[];
   discovered_contexts: string[];
+  deduction_messages: DeductionMessage[];
 };
 
 export type RescanResponse = {
@@ -162,6 +174,7 @@ export type RescanResponse = {
   unlocked_suspects: string[];
   surfaced_results: SearchResult[];
   discovered_contexts: string[];
+  deduction_messages: DeductionMessage[];
 };
 
 export type DialogueResponse = {
@@ -173,6 +186,7 @@ export type DialogueResponse = {
   unlocked_documents: string[];
   unlocked_suspects: string[];
   lead_messages: string[];
+  deduction_messages: DeductionMessage[];
   suspicion_level: number;
   conversation: ConversationState;
 };
@@ -180,9 +194,11 @@ export type DialogueResponse = {
 export type BoardLinkResponse = {
   is_valid: boolean;
   link_id: string;
+  confirmed_note: string;
   unlocked_documents: string[];
   unlocked_suspects: string[];
   board_links: string[];
+  deduction_messages: DeductionMessage[];
 };
 
 export type CommunityExcerpt = {
@@ -223,6 +239,27 @@ export type BoardLinkDefinition = {
   target_id: string;
   link_type: string;
   notes: string;
+};
+
+export type DeductionRequirements = {
+  document_ids: string[];
+  context_values: string[];
+  board_link_ids: string[];
+  suspect_ids: string[];
+  revealed_fact_ids: string[];
+};
+
+export type DeductionBeat = {
+  id: string;
+  title: string;
+  payoff: string;
+  requirements: DeductionRequirements;
+  effects: {
+    unlock_document_ids: string[];
+    unlock_suspect_ids: string[];
+    surface_document_ids: string[];
+  };
+  objective?: string | null;
 };
 
 export type PrivateTruth = {
@@ -273,6 +310,7 @@ export type AuthoringCaseConfig = {
   rescan_rules: RescanRule[];
   submission: SubmissionConfig;
   valid_board_links: BoardLinkDefinition[];
+  deduction_beats: DeductionBeat[];
 };
 
 export type AssetEntry = {
