@@ -30,4 +30,6 @@ jobs:
           --max-instances 3
           --cpu 1
           --memory 512Mi
-          --set-env-vars INVESTIGATION_AI_PROVIDER=gemini,INVESTIGATION_SECURE_COOKIES=true,INVESTIGATION_RATE_LIMITS_ENABLED=true
+          --set-env-vars INVESTIGATION_AI_PROVIDER=gemini,INVESTIGATION_SECURE_COOKIES=true,INVESTIGATION_RATE_LIMITS_ENABLED=true,GEMINI_API_KEY=$GEMINI_API_KEY
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
