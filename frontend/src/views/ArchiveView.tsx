@@ -1,5 +1,5 @@
 import type { FormEvent } from 'react';
-import type { CaseDetailResponse, CaseDocument, DeductionMessage, PlayerCaseState, RescanResponse, SearchResult } from '../types';
+import type { CaseDetailResponse, CaseDocument, PlayerCaseState, RescanResponse, SearchResult } from '../types';
 import { MediaPlate, PanelHeader } from '../ui';
 
 type Props = {
@@ -14,7 +14,8 @@ type Props = {
   searchQuery: string;
   onSearchQueryChange: (q: string) => void;
   searchResults: SearchResult[];
-  deductionMessages: DeductionMessage[];
+  rescanFocus: string;
+  onRescanFocusChange: (focus: string) => void;
   rescanResults: RescanResponse | null;
   onSearch: (event: FormEvent) => Promise<void>;
   onRescan: () => Promise<void>;
@@ -48,7 +49,8 @@ export default function ArchiveView({
   searchQuery,
   onSearchQueryChange,
   searchResults,
-  deductionMessages,
+  rescanFocus,
+  onRescanFocusChange,
   rescanResults,
   onSearch,
   onRescan,
@@ -64,7 +66,7 @@ export default function ArchiveView({
       <PanelHeader
         eyebrow="Archive"
         title={selectedDocument?.title ?? 'Case Archive'}
-        subtitle="Search the file, then run focused rescans by applying a specific lead to a specific place."
+        subtitle="Review records, search the file, and inspect locations."
         actions={
           <button className="dossier-button dossier-button-accent" onClick={onRescan}>
             Run Focused Rescan
@@ -75,7 +77,7 @@ export default function ArchiveView({
         <input
           value={searchQuery}
           onChange={(e) => onSearchQueryChange(e.target.value)}
-          placeholder="Lead to test in this location: hidden door, Ashdown Suite, Lena Orlov..."
+          placeholder="Search the case archive..."
         />
         <button className="dossier-button dossier-button-ghost" type="submit">
           Search
@@ -113,13 +115,6 @@ export default function ArchiveView({
                 <div className="document-body">
                   <h3>{selectedDocument.title}</h3>
                   <p className="document-summary">{selectedDocument.summary}</p>
-                  <div className="tag-row">
-                    {selectedDocument.entity_tags.map((tag) => (
-                      <span key={tag} className="tag">
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
                   <pre>{selectedDocument.body}</pre>
                 </div>
               </div>
@@ -151,6 +146,11 @@ export default function ArchiveView({
               ))}
             </select>
             {selectedLocation ? <p className="document-summary">{selectedLocation.summary}</p> : null}
+            <input
+              value={rescanFocus}
+              onChange={(event) => onRescanFocusChange(event.target.value)}
+              placeholder="What should investigators re-check here?"
+            />
           </section>
 
           <section className="intel-card">
@@ -191,23 +191,6 @@ export default function ArchiveView({
             </div>
           </section>
 
-          {deductionMessages.length ? (
-            <section className="intel-card">
-              <div className="intel-card-header">
-                <span>Deductions</span>
-                <strong>{deductionMessages.length.toString().padStart(2, '0')}</strong>
-              </div>
-              <div className="intel-list">
-                {deductionMessages.map((deduction) => (
-                  <div key={deduction.id} className="intel-row">
-                    <strong>{deduction.title}</strong>
-                    <span>{deduction.message}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
           <section className="intel-card">
             <div className="intel-card-header">
               <span>Rescan Outcome</span>
@@ -216,25 +199,22 @@ export default function ArchiveView({
             <ul className="plain-list">
               <li>Location used: {caseDetail.location_dossiers.find((location) => location.id === rescanResults?.location_id)?.label || selectedLocation?.label || 'none yet'}</li>
               <li>Focus used: {rescanResults?.focus || 'none yet'}</li>
-              <li>Unlocked documents: {rescanResults?.unlocked_documents.join(', ') || 'none'}</li>
-              <li>Unlocked suspects: {rescanResults?.unlocked_suspects.join(', ') || 'none'}</li>
-              <li>Recent contexts: {rescanResults?.discovered_contexts.slice(-3).join(', ') || 'none yet'}</li>
+              <li>
+                New records:{' '}
+                {rescanResults?.unlocked_documents
+                  .map((id) => caseDetail.documents.find((document) => document.id === id)?.title ?? id)
+                  .join(', ') || 'No new records surfaced'}
+              </li>
+              <li>
+                New people of interest:{' '}
+                {rescanResults?.unlocked_suspects
+                  .map((id) => caseDetail.suspects.find((suspect) => suspect.id === id)?.display_name ?? id)
+                  .join(', ') || 'No new people surfaced'}
+              </li>
+              <li>
+                Strongest match: {rescanResults?.surfaced_results[0]?.title || 'No strong archive match'}
+              </li>
             </ul>
-          </section>
-
-          <section className="intel-card">
-            <div className="intel-card-header">
-              <span>Domain Reference</span>
-              <strong>{caseDetail.archive_domains.length.toString().padStart(2, '0')}</strong>
-            </div>
-            <div className="domain-grid">
-              {caseDetail.archive_domains.map((domain) => (
-                <div key={domain.id} className="domain-badge">
-                  <span>{domain.label}</span>
-                  <small>{domain.summary || 'Dossier domain'}</small>
-                </div>
-              ))}
-            </div>
           </section>
         </div>
       </div>

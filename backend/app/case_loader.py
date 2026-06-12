@@ -100,6 +100,19 @@ def load_authoring_bundle(case_dir: Path) -> AuthoringBundle:
     )
 
 
+def loaded_case_from_bundle(bundle: AuthoringBundle) -> LoadedCase:
+    config = _resolve_case_assets(bundle.case.model_copy(deep=True))
+    suspects = {
+        suspect.id: suspect.model_copy(update={"image_url": suspect.image_url or _asset_url(config.id, suspect.image_path)})
+        for suspect in bundle.suspects
+    }
+    documents = {
+        document.id: document.model_copy(update={"image_url": document.image_url or _asset_url(config.id, document.image_path)})
+        for document in bundle.documents
+    }
+    return LoadedCase(config=config, suspects=suspects, documents=documents, prompts=dict(bundle.prompts))
+
+
 def load_cases(cases_root: Path) -> dict[str, LoadedCase]:
     loaded: dict[str, LoadedCase] = {}
     for case_dir in sorted(path for path in cases_root.iterdir() if path.is_dir()):

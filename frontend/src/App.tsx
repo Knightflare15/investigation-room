@@ -1,28 +1,27 @@
 ﻿import { useEffect, useRef } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import AuthoringStudio from './AuthoringStudio';
+import { SESSION_EXPIRED_EVENT } from './api';
 import { useGame } from './context/GameContext';
 import { useGameActions } from './context/useGameActions';
 import type { CaseDocument } from './types';
 import { CrestMark, MediaPlate, SuspicionMeter } from './ui';
 import ArchiveView from './views/ArchiveView';
 import AuthView from './views/AuthView';
-import BoardView from './views/BoardView';
 import CommunityView from './views/CommunityView';
 import HomeView from './views/HomeView';
 import IntakeView from './views/IntakeView';
 import InterrogationView from './views/InterrogationView';
 import SubmissionView from './views/SubmissionView';
 
-type ViewId = 'intake' | 'archive' | 'interrogation' | 'board' | 'submission' | 'community' | 'authoring';
+type ViewId = 'intake' | 'archive' | 'interrogation' | 'submission' | 'community' | 'authoring';
 type TabId = 'home' | ViewId;
 
 const caseTabs: Array<{ id: ViewId; label: string; glyph: string }> = [
   { id: 'intake', label: 'Intake', glyph: 'IN' },
   { id: 'archive', label: 'Archive', glyph: 'AR' },
   { id: 'interrogation', label: 'Interrogation', glyph: 'IQ' },
-  { id: 'board', label: 'Evidence Board', glyph: 'BD' },
-  { id: 'submission', label: 'Submission', glyph: 'SB' },
+  { id: 'submission', label: 'Accuse', glyph: 'AC' },
   { id: 'community', label: 'Community', glyph: 'CM' },
 ];
 
@@ -30,7 +29,7 @@ const overviewLinks: Array<{ label: string; view: Exclude<ViewId, 'authoring'> }
   { label: 'Case Brief', view: 'intake' },
   { label: 'Archive', view: 'archive' },
   { label: 'Interrogation', view: 'interrogation' },
-  { label: 'Theory Board', view: 'board' },
+  { label: 'Accuse', view: 'submission' },
   { label: 'Community', view: 'community' },
 ];
 
@@ -39,8 +38,17 @@ function CaseShell() {
   const { state, dispatch } = useGame();
   const actions = useGameActions();
   const navigate = useNavigate();
-  const location = useLocation();
-  const lastSessionSuspectRef = useRef('');
+
+  async function handleDeleteCase(caseIdToDelete: string) {
+    const summary = [...state.cases, ...state.draftCases, ...state.pendingCases].find(
+      (caseSummary) => caseSummary.id === caseIdToDelete,
+    );
+    const label = summary?.status === 'approved' ? 'case' : 'draft';
+    if (!window.confirm(`Delete ${label} "${summary?.title ?? caseIdToDelete}"? This cannot be undone.`)) return;
+    await actions.deleteCase(caseIdToDelete);
+    dispatch({ type: 'CLEAR_CASE_CONTEXT' });
+    navigate('/');
+  }
 
   useEffect(() => {
     if (caseId && (caseId !== state.selectedCaseId || state.caseDetail?.case.id !== caseId)) {
@@ -55,17 +63,6 @@ function CaseShell() {
     caseDetail?.suspects.find((suspect) => suspect.id === state.selectedSuspectId) ?? caseDetail?.suspects[0];
   const selectedDocument =
     caseDetail?.documents.find((document) => document.id === state.selectedDocumentId) ?? caseDetail?.documents[0];
-
-  useEffect(() => {
-    if (!location.pathname.endsWith('/interrogation')) {
-      lastSessionSuspectRef.current = '';
-      return;
-    }
-    if (!state.isAuthenticated || !selectedSuspect?.id) return;
-    if (lastSessionSuspectRef.current === selectedSuspect.id) return;
-    lastSessionSuspectRef.current = selectedSuspect.id;
-    void actions.beginInterrogationSession(selectedSuspect.id);
-  }, [location.pathname, selectedSuspect?.id, state.isAuthenticated]);
 
   function openDocumentAttachment(doc: CaseDocument | null) {
     if (!doc?.image_url) return;
@@ -87,6 +84,18 @@ function CaseShell() {
     <main className="center-stage">
       {state.error ? <div className="error-banner">{state.error}</div> : null}
       {state.loading ? <div className="rail-panel loading-panel">Loading dossier...</div> : null}
+      {state.activityMessages.length ? (
+        <aside className="activity-toast-stack" aria-live="polite">
+          {state.activityMessages.map((message) => (
+            <div className="activity-toast" key={message}>
+              <span>{message}</span>
+              <button type="button" onClick={() => dispatch({ type: 'CLEAR_ACTIVITY_MESSAGES' })}>
+                Dismiss
+              </button>
+            </div>
+          ))}
+        </aside>
+      ) : null}
 
       <Routes>
         <Route path="intake" element={caseDetail ? <IntakeView caseDetail={caseDetail} /> : null} />
@@ -106,7 +115,8 @@ function CaseShell() {
                 searchQuery={state.searchQuery}
                 onSearchQueryChange={(query) => dispatch({ type: 'SET_SEARCH_QUERY', payload: query })}
                 searchResults={state.searchResults}
-                deductionMessages={state.deductionMessages}
+                rescanFocus={state.rescanFocus}
+                onRescanFocusChange={(focus) => dispatch({ type: 'SET_RESCAN_FOCUS', payload: focus })}
                 rescanResults={state.rescanResults}
                 onSearch={async (event) => {
                   event.preventDefault();
@@ -127,27 +137,10 @@ function CaseShell() {
                 selectedSuspect={selectedSuspect}
                 selectedDocument={selectedDocument}
                 conversations={conversations}
-                clueCards={state.clueCards}
-                groundingResults={state.lastGroundingResults}
-                leadMessages={state.leadMessages}
-                deductionMessages={state.deductionMessages}
-                followUpPrompts={state.followUpPrompts}
                 onTalk={actions.handleTalkStreaming}
                 onConfront={actions.handleConfront}
+                onBeginNewSession={() => selectedSuspect ? actions.beginInterrogationSession(selectedSuspect.id) : Promise.resolve()}
                 onOpenAttachment={openDocumentAttachment}
-              />
-            ) : null
-          }
-        />
-        <Route
-          path="board"
-          element={
-            caseDetail && currentState ? (
-              <BoardView
-                caseDetail={caseDetail}
-                saveState={currentState}
-                boardNodes={state.boardNodes}
-                onBoardLink={actions.handleBoardLink}
               />
             ) : null
           }
@@ -177,6 +170,7 @@ function CaseShell() {
               <CommunityView
                 suspects={unlockedSuspects}
                 communityStats={communityStats}
+                theoryScore={state.theoryScore}
                 onRestartCase={async () => {
                   await actions.restartCase();
                   navigate(`/${caseId}/interrogation`);
@@ -191,10 +185,12 @@ function CaseShell() {
             <AuthoringStudio
               alias={state.alias}
               currentCaseId={state.selectedCaseId}
+              role={state.sessionRole}
               onSelectCase={(id) => {
                 dispatch({ type: 'SET_SELECTED_CASE', payload: id });
                 navigate(`/${id}/interrogation`);
               }}
+              onDeleteCase={handleDeleteCase}
               onPlayableCasesChanged={actions.reloadPlayableCases}
             />
           }
@@ -211,14 +207,15 @@ function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  async function handleDeleteDraft(caseId: string) {
-    const draftSummary = [...state.draftCases, ...state.pendingCases].find((caseSummary) => caseSummary.id === caseId);
-    if (!draftSummary) return;
-    if (!window.confirm(`Delete draft "${draftSummary.title}"? This cannot be undone.`)) {
+  async function handleDeleteCase(caseId: string) {
+    const caseSummary = [...state.cases, ...state.draftCases, ...state.pendingCases].find((item) => item.id === caseId);
+    if (!caseSummary) return;
+    const label = caseSummary.status === 'approved' ? 'case' : 'draft';
+    if (!window.confirm(`Delete ${label} "${caseSummary.title}"? This cannot be undone.`)) {
       return;
     }
     try {
-      await actions.deleteDraftCase(caseId);
+      await actions.deleteCase(caseId);
       if (state.selectedCaseId === caseId) {
         dispatch({ type: 'CLEAR_CASE_CONTEXT' });
       }
@@ -235,6 +232,16 @@ function AppShell() {
       void actions.restoreSession();
     }
   }, []);
+
+  useEffect(() => {
+    function handleSessionExpired() {
+      dispatch({ type: 'LOG_OUT' });
+      dispatch({ type: 'SET_ERROR', payload: 'Your session expired or the local database was reset. Please register or sign in again.' });
+      navigate('/');
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+  }, [dispatch, navigate]);
 
   useEffect(() => {
     if (state.isAuthenticated) {
@@ -277,8 +284,7 @@ function AppShell() {
     }
   }
 
-  const { caseDetail, saveState, conversations, unlockedSuspects } = state;
-  const currentState = saveState ?? caseDetail?.state ?? null;
+  const { caseDetail, conversations, unlockedSuspects } = state;
 
   return (
     <div className="app-shell">
@@ -474,7 +480,7 @@ function AppShell() {
                   dispatch({ type: 'SET_SELECTED_CASE', payload: id });
                   navigate(`/${id}/authoring`);
                 }}
-                onDeleteDraft={handleDeleteDraft}
+                onDeleteCase={handleDeleteCase}
                 onOpenAuthoring={() => navigate('/authoring')}
               />
             }
@@ -485,11 +491,12 @@ function AppShell() {
               <AuthoringStudio
                 alias={state.alias}
                 currentCaseId={state.selectedCaseId}
+                role={state.sessionRole}
                 onSelectCase={(id) => {
                   dispatch({ type: 'SET_SELECTED_CASE', payload: id });
                   navigate(`/${id}/interrogation`);
                 }}
-                onDeleteCase={handleDeleteDraft}
+                onDeleteCase={handleDeleteCase}
                 onPlayableCasesChanged={actions.reloadPlayableCases}
               />
             }
@@ -497,129 +504,6 @@ function AppShell() {
           <Route path="/:caseId/*" element={<CaseShell />} />
         </Routes>
 
-        <aside className="right-rail">
-          {isLibraryRoute ? (
-            <>
-              <section className="rail-panel">
-                <div className="rail-heading">
-                  <span>Library Guide</span>
-                  <strong>Flow</strong>
-                </div>
-                <p className="objective-copy">
-                  Search approved cases from the home screen, open one from the library, and return here whenever you
-                  want to switch investigations.
-                </p>
-              </section>
-
-              <section className="rail-panel">
-                <div className="rail-heading">
-                  <span>Access Level</span>
-                  <strong>{state.sessionRole.toUpperCase()}</strong>
-                </div>
-                <p className="objective-copy">
-                  {state.sessionRole === 'admin'
-                    ? 'Admin accounts can browse public cases, review pending drafts, and approve cases after moderation.'
-                    : 'Player accounts can browse, search, play approved cases, and create private drafts in the authoring studio.'}
-                </p>
-              </section>
-            </>
-          ) : (
-            <>
-              <section className="rail-panel">
-                <div className="rail-heading">
-                  <span>Pinned Evidence</span>
-                  <strong>{state.pinnedDocuments.length.toString().padStart(2, '0')}</strong>
-                </div>
-                <div className="pinboard-grid">
-                  {state.pinnedDocuments.slice(0, 4).map((doc) => (
-                    <button
-                      key={doc.id}
-                      className="pinboard-card"
-                      onClick={() => dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: doc.id })}
-                    >
-                      <MediaPlate
-                        src={doc.image_url}
-                        alt={doc.title}
-                        kind="evidence"
-                        label={doc.id.toUpperCase()}
-                        className="pinboard-media"
-                      />
-                      <strong>{doc.title}</strong>
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              <section className="rail-panel">
-                <div className="rail-heading">
-                  <span>Contradiction Log</span>
-                  <strong>{state.contradictionItems.length.toString().padStart(2, '0')}</strong>
-                </div>
-                <div className="contradiction-stack">
-                  {state.contradictionItems.length ? (
-                    state.contradictionItems.map((item) => (
-                      <article key={item.title} className={`contradiction-card ${item.severity}`}>
-                        <div className="contradiction-topline">
-                          <span>{item.severity}</span>
-                          <strong>{item.title}</strong>
-                        </div>
-                        <p>{item.source}</p>
-                      </article>
-                    ))
-                  ) : (
-                    <div className="empty-state compact">
-                      No contradictions logged yet. Interrogate, search, and rescan to create pressure points.
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              <section className="rail-panel theory-rail">
-                <div className="rail-heading">
-                  <span>Theory Board Progress</span>
-                  <strong>{Math.min(100, 20 + state.completedDeductions.length * 16 + (currentState?.board_links.length ?? 0) * 6)}%</strong>
-                </div>
-                <div className="rail-theory-widget">
-                  <div className="rail-theory-node">Motive</div>
-                  <div className="rail-theory-node center">Truth</div>
-                  <div className="rail-theory-node">Means</div>
-                </div>
-              </section>
-
-              <section className="rail-panel">
-                <div className="rail-heading">
-                  <span>Proven Deductions</span>
-                  <strong>{state.completedDeductions.length.toString().padStart(2, '0')}</strong>
-                </div>
-                <div className="contradiction-stack">
-                  {state.completedDeductions.length ? (
-                    state.completedDeductions.slice(-3).reverse().map((deduction) => (
-                      <article key={deduction.id} className="contradiction-card high">
-                        <div className="contradiction-topline">
-                          <span>proven</span>
-                          <strong>{deduction.title}</strong>
-                        </div>
-                        <p>{deduction.message}</p>
-                      </article>
-                    ))
-                  ) : (
-                    <div className="empty-state compact">
-                      No deductions confirmed yet. Use rescans, evidence pins, and board links to prove a thread.
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              <section className="rail-panel">
-                <div className="rail-heading">
-                  <span>Current Objective</span>
-                  <strong>Live</strong>
-                </div>
-                <p className="objective-copy">{currentState?.current_objective ?? 'Loading objective...'}</p>
-              </section>
-            </>
-          )}
-        </aside>
       </div>
 
       {state.mediaPreview ? (

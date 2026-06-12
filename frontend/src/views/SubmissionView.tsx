@@ -13,6 +13,7 @@ type Props = {
 
 export default function SubmissionView({
   caseDetail,
+  saveState,
   pinnedDocuments,
   onSubmitTheory,
   onNavigateToCommunity,
@@ -28,6 +29,11 @@ export default function SubmissionView({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (!culpritId) return;
+    if (pinnedDocuments.length < 3 || theoryMotive.trim().length < 20 || theoryTimeline.trim().length < 20) {
+      setError('Strengthen the accusation before submitting: pin at least three records and explain both motive and timeline.');
+      return;
+    }
+    setError('');
     setSubmitting(true);
     try {
       await onSubmitTheory(culpritId, theoryMotive, theoryTimeline);
@@ -62,8 +68,8 @@ export default function SubmissionView({
     <section className="dossier-surface">
       <PanelHeader
         eyebrow="Submission"
-        title="Formal Theory Dossier"
-        subtitle="Commit the accusation only when the archive, interrogation, and board align."
+        title="Formal Accusation"
+        subtitle="Name the culprit and state your case."
       />
       {error ? <div className="error-banner">{error}</div> : null}
       <div className="submission-layout">
@@ -88,7 +94,7 @@ export default function SubmissionView({
           </label>
           <div className="submission-actions">
             <button className="dossier-button dossier-button-accent" type="submit" disabled={submitting || restarting}>
-              {submitting ? 'Submitting...' : 'Submit Theory'}
+              {submitting ? 'Submitting...' : 'Submit Accusation'}
             </button>
             <button
               className="dossier-button dossier-button-ghost"
@@ -114,6 +120,13 @@ export default function SubmissionView({
                 <span>{doc.summary}</span>
               </div>
             ))}
+          </div>
+          <div className="submission-readiness">
+            <p className="subheading">Case Readiness</p>
+            <span>{pinnedDocuments.length >= 3 ? 'Ready' : 'Needs work'}: supporting evidence ({pinnedDocuments.length}/3)</span>
+            <span>{theoryMotive.trim().length >= 20 ? 'Ready' : 'Needs work'}: motive explanation</span>
+            <span>{theoryTimeline.trim().length >= 20 ? 'Ready' : 'Needs work'}: timeline explanation</span>
+            <span>{saveState.completed_deduction_ids.length} confirmed deductions reached</span>
           </div>
         </aside>
       </div>

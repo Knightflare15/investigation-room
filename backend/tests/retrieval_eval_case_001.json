@@ -1,0 +1,5 @@
+[
+  {"query": "sedative microdose toxicology", "expected": ["doc_autopsy"]},
+  {"query": "Ashdown suite private booking", "expected": ["doc_incident", "doc_hotel_ledger"]},
+  {"query": "recovered call chain harbor office", "expected": ["doc_call_log"]}
+]

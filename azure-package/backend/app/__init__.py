@@ -1,2 +1,0 @@
-"""Investigation Room backend package."""
-

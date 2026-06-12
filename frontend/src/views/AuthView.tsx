@@ -4,8 +4,8 @@ import { PanelHeader } from '../ui';
 type Props = {
   alias: string;
   onAliasChange: (value: string) => void;
-  onRegister: (alias: string, password: string, adminCode?: string) => Promise<void>;
-  onLogin: (alias: string, password: string, adminCode?: string) => Promise<void>;
+  onRegister: (alias: string, password: string) => Promise<void>;
+  onLogin: (alias: string, password: string) => Promise<void>;
   loading: boolean;
   error: string;
 };
@@ -16,8 +16,6 @@ export default function AuthView({ alias, onAliasChange, onRegister, onLogin, lo
   const [mode, setMode] = useState<AuthMode>('login');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [adminCode, setAdminCode] = useState('');
-  const [wantsAdminAccess, setWantsAdminAccess] = useState(false);
   const [localError, setLocalError] = useState('');
 
   async function handleSubmit(event: FormEvent) {
@@ -31,22 +29,25 @@ export default function AuthView({ alias, onAliasChange, onRegister, onLogin, lo
       setLocalError('Password is required.');
       return;
     }
+    if (mode === 'register' && password.length < 10) {
+      setLocalError('Password must be at least 10 characters.');
+      return;
+    }
     if (mode === 'register' && password !== confirmPassword) {
       setLocalError('Passwords do not match.');
       return;
     }
     try {
       if (mode === 'register') {
-        await onRegister(alias.trim(), password, wantsAdminAccess ? adminCode : undefined);
+        await onRegister(alias.trim(), password);
       } else {
-        await onLogin(alias.trim(), password, wantsAdminAccess ? adminCode : undefined);
+        await onLogin(alias.trim(), password);
       }
     } catch {
       return;
     }
     setPassword('');
     setConfirmPassword('');
-    setAdminCode('');
   }
 
   return (
@@ -55,7 +56,7 @@ export default function AuthView({ alias, onAliasChange, onRegister, onLogin, lo
         <PanelHeader
           eyebrow="Authentication"
           title="Register or sign in"
-          subtitle="Create a player account with an alias and password. Reserved admin aliases also require the configured secret code."
+          subtitle="Create a player account with an alias and password. Admin roles are assigned by the server."
         />
 
         <div className="auth-mode-row">
@@ -82,33 +83,12 @@ export default function AuthView({ alias, onAliasChange, onRegister, onLogin, lo
           </label>
           <label>
             Password
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 6 characters" />
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 10 characters" />
           </label>
           {mode === 'register' ? (
             <label>
               Confirm Password
               <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Repeat password" />
-            </label>
-          ) : null}
-
-          <label className="auth-toggle">
-            <input
-              type="checkbox"
-              checked={wantsAdminAccess}
-              onChange={(event) => setWantsAdminAccess(event.target.checked)}
-            />
-            Request admin access
-          </label>
-
-          {wantsAdminAccess ? (
-            <label>
-              Admin Secret Code
-              <input
-                type="password"
-                value={adminCode}
-                onChange={(event) => setAdminCode(event.target.value)}
-                placeholder="Configured on the backend"
-              />
             </label>
           ) : null}
 

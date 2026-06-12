@@ -10,7 +10,7 @@ type Props = {
   onSearchQueryChange: (value: string) => void;
   onSelectCase: (caseId: string) => void;
   onReviewCase: (caseId: string) => void;
-  onDeleteDraft: (caseId: string) => Promise<void>;
+  onDeleteCase: (caseId: string) => Promise<void>;
   onOpenAuthoring: () => void;
 };
 
@@ -31,7 +31,7 @@ export default function HomeView({
   onSearchQueryChange,
   onSelectCase,
   onReviewCase,
-  onDeleteDraft,
+  onDeleteCase,
   onOpenAuthoring,
 }: Props) {
   const visibleCases = cases.filter((caseSummary) => matchesCase(caseSummary, searchQuery));
@@ -90,6 +90,11 @@ export default function HomeView({
                   <button className="dossier-button dossier-button-accent" type="button" onClick={() => onSelectCase(caseSummary.id)}>
                     Open Case
                   </button>
+                  {role === 'admin' ? (
+                    <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void onDeleteCase(caseSummary.id)}>
+                      Delete Case
+                    </button>
+                  ) : null}
                 </div>
               </article>
             ))
@@ -132,7 +137,7 @@ export default function HomeView({
                   <button className="dossier-button dossier-button-ghost" type="button" onClick={() => onSelectCase(caseSummary.id)}>
                     Play Draft
                   </button>
-                  <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void onDeleteDraft(caseSummary.id)}>
+                  <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void onDeleteCase(caseSummary.id)}>
                     Delete Draft
                   </button>
                 </div>
@@ -178,7 +183,7 @@ export default function HomeView({
                     <button className="dossier-button dossier-button-ghost" type="button" onClick={() => onSelectCase(caseSummary.id)}>
                       Play Draft
                     </button>
-                    <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void onDeleteDraft(caseSummary.id)}>
+                    <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void onDeleteCase(caseSummary.id)}>
                       Delete Draft
                     </button>
                   </div>

@@ -20,6 +20,7 @@ class StreamingTalkTests(unittest.TestCase):
             ollama_chat_model="fake-chat",
             ollama_embed_model="fake-embed",
             default_alias="Tester",
+            ai_provider="deterministic",
         )
         self.game = GameService(settings)
         self.alias = "Tester"
@@ -46,6 +47,23 @@ class StreamingTalkTests(unittest.TestCase):
         self.assertEqual(len(suspect_turns), 1)
         # The persisted reply is exactly what was streamed to the player.
         self.assertEqual(suspect_turns[0].text, streamed)
+
+    def test_streamed_denial_does_not_advance_an_unspoken_fact(self) -> None:
+        denial = "No. You're reading too much into ordinary business discussions."
+        self.game.dialogue.stream_reply = lambda *args, **kwargs: iter([denial])  # type: ignore[method-assign]
+
+        list(
+            self.game.stream_talk_to_suspect(
+                "case-001",
+                self.alias,
+                self.suspect_id,
+                "Why was the partnership dissolution a financial motive?",
+            )
+        )
+
+        conversation = self.game.db.load_conversation("case-001", self.alias, self.suspect_id)
+        self.assertIsNotNone(conversation)
+        self.assertEqual(conversation.revealed_fact_ids, [])
 
 
 if __name__ == "__main__":

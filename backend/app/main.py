@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import time
+import uuid
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -67,29 +69,66 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_origins),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 app.mount("/case-assets", StaticFiles(directory=settings.cases_path), name="case-assets")
 
-if settings.secret_key == "dev-insecure-key" or settings.admin_access_code == "change-me":
-    logger.warning(
-        "Production security warning: default auth secrets are still configured. Set INVESTIGATION_SECRET_KEY and INVESTIGATION_ADMIN_ACCESS_CODE before going live."
-    )
 
+@app.middleware("http")
+async def production_guardrails(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    started = time.monotonic()
+    client_ip = request.client.host if request.client else "unknown"
+    path = request.url.path
+    try:
+        content_length = int(request.headers.get("content-length", "0") or "0")
+    except ValueError:
+        return Response("Invalid Content-Length", status_code=400)
+    if "multipart/form-data" not in request.headers.get("content-type", "") and content_length > 2 * 1024 * 1024:
+        return Response("Request body too large", status_code=413)
+    bucket = ""
+    limit = 0
+    window = 3600
+    if path in {"/auth/register", "/auth/login"}:
+        bucket, limit, window = "auth", settings.auth_rate_limit, 600
+    elif "/suspects/" in path and (path.endswith("/talk") or path.endswith("/talk/stream")):
+        bucket, limit = "dialogue", settings.dialogue_rate_limit
+    elif path in {"/authoring/cases/generate", "/authoring/cases/ingest"}:
+        bucket, limit = "generation", settings.generation_rate_limit
+    if settings.rate_limits_enabled and bucket and not get_auth_service().db.consume_rate_limit(bucket, client_ip, limit, window, int(time.time())):
+        return Response("Rate limit exceeded", status_code=429, headers={"Retry-After": str(window)})
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https:"
+    logger.info("request_complete request_id=%s method=%s path=%s status=%s duration_ms=%d", request_id, request.method, path, response.status_code, (time.monotonic() - started) * 1000)
+    return response
 
+@app.get("/health/live")
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
+@app.get("/health/ready")
+def readiness(game: Annotated[GameService, Depends(get_game_service)]):
+    return {"status": "ready", "cases": len(game.list_cases())}
+
+
 @app.post("/auth/register")
 def register(
     payload: AuthRegisterRequest,
+    response: Response,
     auth: Annotated[AuthService, Depends(get_auth_service)],
 ):
     try:
-        return auth.register(payload.alias, payload.password, payload.admin_code)
+        session = auth.register(payload.alias, payload.password)
+        response.set_cookie("investigation_session", session.token, httponly=True, secure=settings.secure_cookies, samesite="lax", max_age=settings.session_ttl_seconds)
+        return SessionStatusResponse(alias=session.alias, role=session.role)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PermissionError as exc:
@@ -99,10 +138,13 @@ def register(
 @app.post("/auth/login")
 def login(
     payload: AuthLoginRequest,
+    response: Response,
     auth: Annotated[AuthService, Depends(get_auth_service)],
 ):
     try:
-        return auth.login(payload.alias, payload.password, payload.admin_code)
+        session = auth.login(payload.alias, payload.password)
+        response.set_cookie("investigation_session", session.token, httponly=True, secure=settings.secure_cookies, samesite="lax", max_age=settings.session_ttl_seconds)
+        return SessionStatusResponse(alias=session.alias, role=session.role)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PermissionError as exc:
@@ -112,6 +154,22 @@ def login(
 @app.get("/session", response_model=SessionStatusResponse)
 def get_session(player: Annotated[SessionPrincipal, Depends(get_player)]):
     return SessionStatusResponse(alias=player.alias, role=player.role)
+
+
+@app.post("/auth/logout")
+def logout(
+    request: Request,
+    response: Response,
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+):
+    token = request.cookies.get("investigation_session")
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    if token:
+        auth.revoke(token)
+    response.delete_cookie("investigation_session")
+    return {"logged_out": True}
 
 
 @app.get("/cases")
@@ -229,21 +287,22 @@ def talk_to_suspect_stream(
 ):
     def event_generator():
         try:
+            lead_event: dict[str, object] = {}
             grounding_results = game.get_talk_grounding(case_id, player.alias, suspect_id, payload.message)
-            yield f"data: [GROUNDING]{json.dumps([result.model_dump(mode='json') for result in grounding_results])}\n\n"
+            yield f"data: {json.dumps({'type': 'grounding', 'results': [result.model_dump(mode='json') for result in grounding_results]})}\n\n"
             for token in game.stream_talk_to_suspect(
                 case_id,
                 player.alias,
                 suspect_id,
                 payload.message,
                 grounding_results=grounding_results,
+                event_sink=lead_event,
             ):
-                yield f"data: {token}\n\n"
-            lead_event = game.pop_stream_lead_event(case_id, player.alias, suspect_id)
-            yield f"data: [LEADS]{json.dumps(lead_event)}\n\n"
+                yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
+            yield f"data: {json.dumps({'type': 'leads', **lead_event})}\n\n"
         except KeyError as exc:
-            yield f"data: [ERROR] {exc}\n\n"
-        yield "data: [DONE]\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -331,7 +390,7 @@ def create_authoring_case(
     player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        bundle = authoring.create_case(payload, player.alias)
+        bundle = authoring.create_case(payload, player.alias, player.user_id)
         game.reload_cases()
         return bundle
     except ValueError as exc:
@@ -346,7 +405,7 @@ def generate_authoring_case(
     player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        generated = authoring.generate_case_from_brief(payload, player.alias)
+        generated = authoring.generate_case_from_brief(payload, player.alias, player.user_id)
         game.reload_cases()
         return generated
     except ValueError as exc:
@@ -361,7 +420,7 @@ def ingest_authoring_case(
     player: Annotated[SessionPrincipal, Depends(get_player)],
 ):
     try:
-        generated = authoring.ingest_case_from_source(payload, player.alias)
+        generated = authoring.ingest_case_from_source(payload, player.alias, player.user_id)
         game.reload_cases()
         return generated
     except ValueError as exc:
@@ -436,8 +495,10 @@ async def upload_authoring_asset(
     file: UploadFile = File(...),
 ):
     try:
-        content = await file.read()
-        asset = authoring.save_asset(case_id, folder, file.filename or "asset.bin", content, player.alias)
+        content = await file.read(settings.max_upload_bytes + 1)
+        if len(content) > settings.max_upload_bytes:
+            raise ValueError("Upload exceeds the 5 MB limit")
+        asset = authoring.save_asset(case_id, folder, file.filename or "asset.bin", content, player.alias, file.content_type)
         game.reload_cases()
         return asset
     except ValueError as exc:

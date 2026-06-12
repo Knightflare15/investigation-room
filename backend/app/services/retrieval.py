@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from dataclasses import dataclass
-from urllib import error, request
 
 from ..config import Settings
 from ..models import CaseDocument, LoadedCase, SearchResult
+from .providers import EmbeddingProvider, ProviderUnavailable, create_embedding_provider
 
 
 def _tokenize(text: str) -> list[str]:
@@ -40,32 +41,17 @@ class OllamaClient:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.provider = create_embedding_provider(settings)
         self._embedding_cache: dict[str, list[float]] = {}
 
     def embed(self, text: str) -> list[float] | None:
         if text in self._embedding_cache:
             return self._embedding_cache[text]
 
-        payload = json.dumps({"model": self.settings.ollama_embed_model, "input": text}).encode("utf-8")
-        req = request.Request(
-            f"{self.settings.ollama_base_url}/api/embed",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with request.urlopen(req, timeout=10) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except (error.URLError, TimeoutError, json.JSONDecodeError):
+            vector = self.provider.embed(text)
+        except ProviderUnavailable:
             return None
-
-        vector = None
-        embeddings = body.get("embeddings")
-        if isinstance(embeddings, list) and embeddings:
-            if isinstance(embeddings[0], list):
-                vector = embeddings[0]
-            elif all(isinstance(item, (int, float)) for item in embeddings):
-                vector = embeddings
         if vector is None:
             return None
         if len(self._embedding_cache) >= self._MAX_CACHE:
@@ -90,15 +76,17 @@ class RetrievalService:
     def build_chunks(self, documents: list[CaseDocument]) -> list[ChunkRecord]:
         chunks: list[ChunkRecord] = []
         for document in documents:
-            paragraphs = [paragraph.strip() for paragraph in document.body.split("\n\n") if paragraph.strip()]
-            if not paragraphs:
-                paragraphs = [document.body.strip()]
-            for index, paragraph in enumerate(paragraphs, start=1):
+            tokens = re.findall(r"\S+", document.body)
+            windows = [" ".join(tokens[start : start + 120]) for start in range(0, len(tokens), 90)]
+            if not windows:
+                windows = [document.body.strip()]
+            for index, text in enumerate(windows, start=1):
+                content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
                 chunks.append(
                     ChunkRecord(
-                        chunk_id=f"{document.id}::p{index}",
+                        chunk_id=f"{document.case_id}:v1:{document.id}:{content_hash}:{index}",
                         document=document,
-                        text=paragraph,
+                        text=text,
                     )
                 )
         return chunks
@@ -122,7 +110,7 @@ class RetrievalService:
         preferred_terms = [term.lower() for term in (preferred_terms or []) if term.strip()]
         strong_match_terms = [term.lower() for term in (strong_match_terms or []) if term.strip()]
 
-        lexical_scored: list[tuple[float, ChunkRecord, list[str]]] = []
+        candidates: list[tuple[float, float, ChunkRecord, list[str]]] = []
         for chunk in chunks:
             chunk_tokens = _tokenize(chunk.text)
             overlap = len(set(query_tokens) & set(chunk_tokens))
@@ -137,24 +125,27 @@ class RetrievalService:
                 strong_match = any(term in text_lower for term in strong_match_terms) if strong_match_terms else False
                 if not strong_match:
                     keyword_score -= 1.5
-            if keyword_score <= 0 and query_vector is None:
-                continue
-            lexical_scored.append((keyword_score, chunk, entity_matches))
-
-        lexical_scored.sort(key=lambda item: item[0], reverse=True)
-        shortlist_size = max(limit * 4, 8)
-        shortlisted = lexical_scored[:shortlist_size] if lexical_scored else []
-
-        scored: list[SearchResult] = []
-        for keyword_score, chunk, entity_matches in shortlisted:
             semantic_score = 0.0
             if query_vector is not None:
                 chunk_vector = self._get_chunk_embedding(chunk)
                 if chunk_vector is not None:
                     semantic_score = _cosine_similarity(query_vector, chunk_vector) * 4.0
-            total_score = keyword_score + semantic_score
-            if total_score <= 0:
+            if keyword_score <= 0 and semantic_score < 0.65:
                 continue
+            candidates.append((keyword_score, semantic_score, chunk, entity_matches))
+
+        lexical_order = {
+            item[2].chunk_id: rank
+            for rank, item in enumerate(sorted(candidates, key=lambda item: item[0], reverse=True), start=1)
+        }
+        semantic_order = {
+            item[2].chunk_id: rank
+            for rank, item in enumerate(sorted(candidates, key=lambda item: item[1], reverse=True), start=1)
+        }
+        scored: list[SearchResult] = []
+        for keyword_score, semantic_score, chunk, entity_matches in candidates:
+            rrf = (1 / (60 + lexical_order[chunk.chunk_id])) + (1 / (60 + semantic_order[chunk.chunk_id]))
+            total_score = keyword_score + semantic_score + (rrf * 20)
             snippet = chunk.text[:280] + ("..." if len(chunk.text) > 280 else "")
             scored.append(
                 SearchResult(
@@ -170,12 +161,12 @@ class RetrievalService:
 
         scored.sort(key=lambda item: item.score, reverse=True)
         deduped: list[SearchResult] = []
-        seen_docs: set[str] = set()
+        doc_counts: dict[str, int] = {}
         for result in scored:
-            if result.document_id in seen_docs:
+            if doc_counts.get(result.document_id, 0) >= 2:
                 continue
             deduped.append(result)
-            seen_docs.add(result.document_id)
+            doc_counts[result.document_id] = doc_counts.get(result.document_id, 0) + 1
             if len(deduped) >= limit:
                 break
         return deduped

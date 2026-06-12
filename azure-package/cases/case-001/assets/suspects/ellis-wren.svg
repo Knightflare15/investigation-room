@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 960">
-  <rect width="800" height="960" fill="#151718"/>
-  <rect x="42" y="42" width="716" height="876" rx="36" fill="#20292b" stroke="#88a9ac" stroke-width="4"/>
-  <circle cx="400" cy="304" r="146" fill="#7e8c8e"/>
-  <path d="M250 746c31-125 102-208 150-208 44 0 112 83 150 208" fill="#66777c"/>
-  <path d="M287 246c38-52 73-74 115-74 86 0 146 62 152 156-21-32-65-56-129-56-58 0-105 21-141 61-18 20-31 42-40 67-17-57-10-113 43-154z" fill="#dfe7e7"/>
-  <text x="400" y="858" fill="#edf7f7" font-family="Georgia, serif" font-size="48" text-anchor="middle">Dr. Ellis Wren</text>
-</svg>

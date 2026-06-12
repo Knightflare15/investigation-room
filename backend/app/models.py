@@ -48,9 +48,19 @@ class RescanRule(BaseModel):
     effects: TriggerEffects
 
 
+class CanonicalTruth(BaseModel):
+    culprit_id: str = ""
+    motive_summary: str = ""
+    timeline_summary: str = ""
+    motive_concepts: list[str] = Field(default_factory=list)
+    timeline_concepts: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
 class SubmissionConfig(BaseModel):
     required_fields: list[str]
     min_evidence_count: int = 1
+    canonical_truth: CanonicalTruth = Field(default_factory=CanonicalTruth)
 
 
 class BoardLinkDefinition(BaseModel):
@@ -96,6 +106,7 @@ class CaseConfig(BaseModel):
     version: int
     status: str = "approved"
     owner_alias: str | None = None
+    owner_user_id: str | None = None
     police_summary: str = ""
     cover_image_path: str | None = None
     cover_image_url: str | None = None
@@ -129,10 +140,19 @@ class PrivateTruth(BaseModel):
     non_negotiables: list[str] = Field(default_factory=list)
 
 
+class FactRevealRule(BaseModel):
+    fact_id: str
+    topics: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    min_trust: int = Field(default=0, ge=0, le=100)
+    max_guardedness: int = Field(default=100, ge=0, le=100)
+
+
 class DialogueRules(BaseModel):
     baseline_tone: str
     lie_strategy: str
     pressure_triggers: list[str] = Field(default_factory=list)
+    fact_reveal_rules: list[FactRevealRule] = Field(default_factory=list)
     shut_down_threshold: int = 75
 
 
@@ -203,6 +223,7 @@ class PlayerCaseState(BaseModel):
 class ConversationTurn(BaseModel):
     speaker: str
     text: str
+    citations: list[str] = Field(default_factory=list)
 
 
 class ConversationState(BaseModel):
@@ -216,8 +237,8 @@ class ConversationState(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    query: str
-    limit: int = 6
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=6, ge=1, le=20)
 
 
 class SearchResult(BaseModel):
@@ -238,8 +259,8 @@ class SearchResponse(BaseModel):
 
 
 class RescanRequest(BaseModel):
-    focus: str = ""
-    location_id: str | None = None
+    focus: str = Field(default="", max_length=500)
+    location_id: str | None = Field(default=None, max_length=120)
 
 
 class RescanResponse(BaseModel):
@@ -253,7 +274,7 @@ class RescanResponse(BaseModel):
 
 
 class TalkRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=2000)
 
 
 class DialogueResponse(BaseModel):
@@ -271,15 +292,15 @@ class DialogueResponse(BaseModel):
 
 
 class ConfrontRequest(BaseModel):
-    evidence_id: str
-    message: str = ""
+    evidence_id: str = Field(min_length=1, max_length=120)
+    message: str = Field(default="", max_length=2000)
 
 
 class BoardLinkRequest(BaseModel):
-    source_id: str
-    target_id: str
-    link_type: str
-    notes: str = ""
+    source_id: str = Field(min_length=1, max_length=120)
+    target_id: str = Field(min_length=1, max_length=120)
+    link_type: str = Field(min_length=1, max_length=120)
+    notes: str = Field(default="", max_length=1000)
 
 
 class BoardLinkResponse(BaseModel):
@@ -293,13 +314,13 @@ class BoardLinkResponse(BaseModel):
 
 
 class TogglePinRequest(BaseModel):
-    document_id: str
+    document_id: str = Field(min_length=1, max_length=120)
 
 
 class SubmitTheoryRequest(BaseModel):
-    culprit_id: str
-    motive_text: str
-    timeline_text: str
+    culprit_id: str = Field(min_length=1, max_length=120)
+    motive_text: str = Field(min_length=1, max_length=4000)
+    timeline_text: str = Field(min_length=1, max_length=4000)
     evidence_ids: list[str] = Field(default_factory=list)
 
 
@@ -315,9 +336,27 @@ class CommunityStatsResponse(BaseModel):
     excerpts: list[CommunityExcerpt]
 
 
+class ScoreCategory(BaseModel):
+    earned: int
+    possible: int
+    feedback: str
+
+
+class TheoryScore(BaseModel):
+    total: int
+    possible: int = 100
+    verdict: str
+    culprit: ScoreCategory
+    motive: ScoreCategory
+    timeline: ScoreCategory
+    evidence: ScoreCategory
+    canonical_truth: CanonicalTruth
+
+
 class SubmitTheoryResponse(BaseModel):
     saved: bool
     stats: CommunityStatsResponse
+    score: TheoryScore
 
 
 class CaseSummary(BaseModel):
@@ -360,23 +399,23 @@ class AuthoringBundle(BaseModel):
 
 
 class CreateCaseRequest(BaseModel):
-    id: str
-    title: str
-    hook: str
+    id: str = Field(default="", max_length=80, pattern=r"^[a-zA-Z0-9_-]*$")
+    title: str = Field(min_length=1, max_length=120)
+    hook: str = Field(min_length=1, max_length=1000)
     difficulty: str = "medium"
     estimated_minutes: int = 45
 
 
 class CaseBriefInput(BaseModel):
-    case_id: str
-    brief: str
+    case_id: str = Field(default="", max_length=80, pattern=r"^[a-zA-Z0-9_-]*$")
+    brief: str = Field(min_length=1, max_length=50000)
     difficulty: str = "medium"
     estimated_minutes: int = 45
 
 
 class CaseIngestionInput(BaseModel):
-    case_id: str
-    source_text: str
+    case_id: str = Field(default="", max_length=80, pattern=r"^[a-zA-Z0-9_-]*$")
+    source_text: str = Field(min_length=1, max_length=50000)
     difficulty: str = "medium"
     estimated_minutes: int = 45
     title_hint: str | None = None
@@ -450,7 +489,7 @@ class SourceGrounding(BaseModel):
     supporting_chunk_ids: list[str] = Field(default_factory=list)
     preview: str
     confidence: Literal["high", "medium", "fallback"] = "medium"
-    method: Literal["ollama", "heuristic"] = "heuristic"
+    method: Literal["gemini", "ollama", "heuristic"] = "heuristic"
 
 
 class CaseIngestionResponse(BaseModel):
@@ -463,20 +502,19 @@ SessionRole = Literal["player", "admin"]
 
 
 class SessionPrincipal(BaseModel):
+    user_id: str = ""
     alias: str
     role: SessionRole
 
 
 class AuthRegisterRequest(BaseModel):
-    alias: str
-    password: str
-    admin_code: str | None = None
+    alias: str = Field(min_length=2, max_length=64)
+    password: str = Field(min_length=10, max_length=256)
 
 
 class AuthLoginRequest(BaseModel):
-    alias: str
-    password: str
-    admin_code: str | None = None
+    alias: str = Field(min_length=2, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
 
 
 class SessionResponse(BaseModel):
@@ -491,8 +529,18 @@ class SessionStatusResponse(BaseModel):
 
 
 class AuthUserRecord(BaseModel):
+    id: str = ""
     alias: str
     password_hash: str
+    role: SessionRole = "player"
+
+
+class SessionRecord(BaseModel):
+    token_hash: str
+    user_id: str
+    alias: str
+    role: SessionRole
+    expires_at: int
 
 
 class UploadAssetResponse(BaseModel):

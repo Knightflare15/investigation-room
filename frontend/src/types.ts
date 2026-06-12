@@ -25,6 +25,7 @@ export type CaseSummary = {
   version: number;
   status: string;
   owner_alias?: string | null;
+  owner_user_id?: string | null;
   cover_image_path?: string | null;
   cover_image_url?: string | null;
 };
@@ -32,7 +33,6 @@ export type CaseSummary = {
 export type SessionRole = 'player' | 'admin';
 
 export type SessionInfo = {
-  token: string;
   alias: string;
   role: SessionRole;
 };
@@ -45,13 +45,11 @@ export type SessionStatus = {
 export type AuthRegisterRequest = {
   alias: string;
   password: string;
-  admin_code?: string | null;
 };
 
 export type AuthLoginRequest = {
   alias: string;
   password: string;
-  admin_code?: string | null;
 };
 
 export type PublicProfile = {
@@ -121,6 +119,7 @@ export type DeductionMessage = {
 export type ConversationTurn = {
   speaker: string;
   text: string;
+  citations?: string[];
 };
 
 export type ConversationState = {
@@ -191,16 +190,6 @@ export type DialogueResponse = {
   conversation: ConversationState;
 };
 
-export type BoardLinkResponse = {
-  is_valid: boolean;
-  link_id: string;
-  confirmed_note: string;
-  unlocked_documents: string[];
-  unlocked_suspects: string[];
-  board_links: string[];
-  deduction_messages: DeductionMessage[];
-};
-
 export type CommunityExcerpt = {
   player_alias: string;
   excerpt: string;
@@ -216,6 +205,33 @@ export type CommunityStatsResponse = {
 export type SubmitTheoryResponse = {
   saved: boolean;
   stats: CommunityStatsResponse;
+  score: TheoryScore;
+};
+
+export type CanonicalTruth = {
+  culprit_id: string;
+  motive_summary: string;
+  timeline_summary: string;
+  motive_concepts: string[];
+  timeline_concepts: string[];
+  evidence_ids: string[];
+};
+
+export type ScoreCategory = {
+  earned: number;
+  possible: number;
+  feedback: string;
+};
+
+export type TheoryScore = {
+  total: number;
+  possible: number;
+  verdict: string;
+  culprit: ScoreCategory;
+  motive: ScoreCategory;
+  timeline: ScoreCategory;
+  evidence: ScoreCategory;
+  canonical_truth: CanonicalTruth;
 };
 
 export type RescanRule = {
@@ -231,6 +247,7 @@ export type RescanRule = {
 export type SubmissionConfig = {
   required_fields: string[];
   min_evidence_count: number;
+  canonical_truth: CanonicalTruth;
 };
 
 export type BoardLinkDefinition = {
@@ -272,6 +289,13 @@ export type DialogueRules = {
   baseline_tone: string;
   lie_strategy: string;
   pressure_triggers: string[];
+  fact_reveal_rules: Array<{
+    fact_id: string;
+    topics: string[];
+    evidence_ids: string[];
+    min_trust: number;
+    max_guardedness: number;
+  }>;
   shut_down_threshold: number;
 };
 
@@ -357,7 +381,7 @@ export type SourceGrounding = {
   supporting_chunk_ids: string[];
   preview: string;
   confidence: 'high' | 'medium' | 'fallback';
-  method: 'ollama' | 'heuristic';
+  method: 'gemini' | 'ollama' | 'heuristic';
 };
 
 export type GenerateCaseDraftResponse = {
@@ -367,15 +391,4 @@ export type GenerateCaseDraftResponse = {
 
 export type CaseIngestionResponse = GenerateCaseDraftResponse & {
   groundings: SourceGrounding[];
-};
-
-export type ContradictionItem = {
-  title: string;
-  severity: 'high' | 'medium' | 'low';
-  source: string;
-};
-
-export type ClueCard = {
-  text: string;
-  type: 'location' | 'intent' | 'behavior' | 'mindset';
 };

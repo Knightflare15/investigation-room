@@ -2,30 +2,23 @@ from __future__ import annotations
 
 import unittest
 
-from backend.app.auth import issue_token, read_token
+from backend.app.auth import issue_token, read_token, token_hash
 
 
 class AuthTokenTests(unittest.TestCase):
-    def test_issue_then_read_roundtrip(self) -> None:
+    def test_tokens_are_opaque_and_high_entropy(self) -> None:
         token = issue_token("Nero Wolfe")
-        player = read_token(token)
-        self.assertIsNotNone(player)
-        assert player is not None
-        self.assertEqual(player.alias, "Nero Wolfe")
-        self.assertEqual(player.role, "player")
+        self.assertGreaterEqual(len(token), 48)
+        self.assertNotIn("Nero", token)
+        self.assertEqual(len(token_hash(token)), 64)
 
-    def test_tampered_payload_rejected(self) -> None:
-        token = issue_token("Nero")
-        payload_b64, _, signature = token.partition(".")
-        # Swap in a different payload while keeping the original signature.
-        forged = issue_token("Mallory").partition(".")[0] + "." + signature
-        self.assertIsNone(read_token(forged))
-
-    def test_garbage_and_missing_tokens_rejected(self) -> None:
+    def test_legacy_stateless_tokens_fail_closed(self) -> None:
+        self.assertIsNone(read_token(issue_token()))
         self.assertIsNone(read_token(None))
-        self.assertIsNone(read_token(""))
         self.assertIsNone(read_token("not-a-token"))
-        self.assertIsNone(read_token("a.b.c"))
+
+    def test_tokens_are_unique(self) -> None:
+        self.assertNotEqual(issue_token(), issue_token())
 
 
 if __name__ == "__main__":

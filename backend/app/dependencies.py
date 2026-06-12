@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from fastapi import Header, HTTPException
+import time
 
-from .auth import read_token
+from fastapi import Cookie, Header, HTTPException
+
+from .auth import token_hash
 from .config import settings
 from .models import SessionPrincipal
 from .services.accounts import AuthService
@@ -27,18 +29,20 @@ def get_auth_service() -> AuthService:
     return AuthService(settings)
 
 
-def get_player(authorization: str | None = Header(default=None)) -> SessionPrincipal:
-    """Resolve the player alias from a signed bearer token.
-
-    Raises 401 if the Authorization header is missing or the token fails signature
-    verification. Replaces the old spoofable X-Player-Alias header.
-    """
-    token = None
+def get_player(
+    authorization: str | None = Header(default=None),
+    investigation_session: str | None = Cookie(default=None),
+) -> SessionPrincipal:
+    """Resolve the player from an expiring opaque cookie or bearer session."""
+    token = investigation_session
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization[7:].strip()
-    player = read_token(token)
-    if player is None:
+    if not token:
         raise HTTPException(status_code=401, detail="Missing or invalid session token")
-    if get_auth_service().db.load_auth_user(player.alias) is None:
+    session = get_auth_service().db.load_session(token_hash(token), int(time.time()))
+    if session is None:
         raise HTTPException(status_code=401, detail="Session user no longer exists")
-    return player
+    user = get_auth_service().db.load_auth_user(session.alias)
+    if user is None or user.id != session.user_id:
+        raise HTTPException(status_code=401, detail="Session user no longer exists")
+    return SessionPrincipal(user_id=user.id, alias=user.alias, role=user.role)

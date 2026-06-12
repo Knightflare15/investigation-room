@@ -3,7 +3,6 @@ import type {
   AuthRegisterRequest,
   AssetEntry,
   AuthoringBundle,
-  BoardLinkResponse,
   CaseBriefInput,
   CaseDetailResponse,
   CaseIngestionInput,
@@ -23,7 +22,13 @@ import type {
   SubmitTheoryResponse,
 } from './types';
 
-export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
+const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '');
+
+// Keep local API calls on the same site as the page so SameSite session cookies
+// work whether Vite was opened through localhost or 127.0.0.1. Production serves
+// the built frontend from FastAPI, so relative URLs are the correct default.
+export const API_BASE = configuredApiBase
+  ?? (import.meta.env.DEV ? `${window.location.protocol}//${window.location.hostname}:8000` : '');
 
 function resolveApiUrl(path?: string | null) {
   if (!path) return path ?? null;
@@ -93,58 +98,66 @@ function normalizeAuthoringBundle(bundle: AuthoringBundle): AuthoringBundle {
   };
 }
 
-// alias -> signed bearer token + derived role. Persisted so a reload skips the handshake.
-const tokenCache = new Map<string, string>();
 const sessionCache = new Map<string, SessionInfo>();
-
-function tokenStorageKey(alias: string) {
-  return `investigation-room-token::${alias}`;
-}
+export const SESSION_EXPIRED_EVENT = 'investigation-room-session-expired';
 
 function sessionStorageKey(alias: string) {
   return `investigation-room-session::${alias}`;
 }
 
 function cacheSession(session: SessionInfo): SessionInfo {
-  tokenCache.set(session.alias, session.token);
   sessionCache.set(session.alias, session);
-  localStorage.setItem(tokenStorageKey(session.alias), session.token);
   localStorage.setItem(sessionStorageKey(session.alias), JSON.stringify(session));
   return session;
 }
 
-async function fetchSessionStatus(token: string): Promise<SessionStatus> {
+function clearStoredSession(alias?: string) {
+  if (alias) {
+    sessionCache.delete(alias);
+    localStorage.removeItem(sessionStorageKey(alias));
+  } else {
+    sessionCache.clear();
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith('investigation-room-session::')) {
+        localStorage.removeItem(key);
+      }
+    }
+  }
+}
+
+function expireSession(alias?: string) {
+  clearStoredSession(alias);
+  window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+}
+
+async function fetchSessionStatus(): Promise<SessionStatus> {
   const response = await fetch(`${API_BASE}/session`, {
-    headers: { Authorization: `Bearer ${token}` },
+    credentials: 'include',
   });
   if (!response.ok) {
+    if (response.status === 401) expireSession();
     throw new Error(`Session lookup failed: ${response.status}`);
   }
   return response.json() as Promise<SessionStatus>;
 }
 
 export async function restoreSession(alias: string): Promise<SessionInfo> {
-  const cachedSession = sessionCache.get(alias);
-  if (cachedSession) return cachedSession;
-
   const storedSession = localStorage.getItem(sessionStorageKey(alias));
   if (storedSession) {
     try {
       const parsed = JSON.parse(storedSession) as SessionInfo;
-      if (parsed.alias === alias && parsed.token && parsed.role) {
-        return cacheSession(parsed);
+      if (parsed.alias === alias && parsed.role) {
+        const current = await fetchSessionStatus();
+        return cacheSession({ alias: current.alias, role: current.role });
       }
     } catch {
       localStorage.removeItem(sessionStorageKey(alias));
     }
   }
 
-  const cachedToken = tokenCache.get(alias) ?? localStorage.getItem(tokenStorageKey(alias)) ?? undefined;
-  if (cachedToken) {
-    const current = await fetchSessionStatus(cachedToken);
-    return cacheSession({ token: cachedToken, alias: current.alias, role: current.role });
-  }
-  throw new Error('No saved session found');
+  const current = await fetchSessionStatus();
+  return cacheSession({ alias: current.alias, role: current.role });
 }
 
 async function submitAuth(path: '/auth/register' | '/auth/login', payload: AuthRegisterRequest | AuthLoginRequest) {
@@ -152,35 +165,49 @@ async function submitAuth(path: '/auth/register' | '/auth/login', payload: AuthR
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    credentials: 'include',
   });
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || `Authentication failed: ${response.status}`);
+    if (response.status === 401) expireSession(payload.alias);
+    let detail = `Authentication failed: ${response.status}`;
+    const fallbackText = await response.clone().text();
+    try {
+      const body = (await response.json()) as { detail?: string | Array<{ msg?: string }> };
+      detail = typeof body.detail === 'string'
+        ? body.detail
+        : body.detail?.[0]?.msg ?? detail;
+    } catch {
+      detail = fallbackText || detail;
+    }
+    throw new Error(detail);
   }
-  return cacheSession((await response.json()) as SessionInfo);
+  const session = (await response.json()) as SessionStatus;
+  return cacheSession({ alias: session.alias, role: session.role });
 }
 
-/** Return the signed bearer token for a restored authenticated session. */
-export async function ensureToken(alias: string): Promise<string> {
-  return (await restoreSession(alias)).token;
+/** Confirm that the HttpOnly-cookie session is still valid. */
+export async function ensureToken(alias: string): Promise<void> {
+  await restoreSession(alias);
 }
 
 export async function authHeaders(alias: string): Promise<Record<string, string>> {
-  return { Authorization: `Bearer ${await ensureToken(alias)}` };
+  await ensureToken(alias);
+  return {};
 }
 
 async function request<T>(path: string, alias: string, init?: RequestInit): Promise<T> {
-  const token = await ensureToken(alias);
+  await ensureToken(alias);
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
       ...(init?.headers ?? {}),
     },
   });
 
   if (!response.ok) {
+    if (response.status === 401) expireSession(alias);
     const detail = await response.text();
     throw new Error(detail || `Request failed: ${response.status}`);
   }
@@ -199,10 +226,8 @@ export const api = {
     return submitAuth('/auth/login', payload);
   },
   logout(alias: string) {
-    tokenCache.delete(alias);
-    sessionCache.delete(alias);
-    localStorage.removeItem(tokenStorageKey(alias));
-    localStorage.removeItem(sessionStorageKey(alias));
+    clearStoredSession(alias);
+    void fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
   },
   async listCases(alias: string) {
     const cases = await request<CaseSummary[]>('/cases', alias);
@@ -251,17 +276,6 @@ export const api = {
     return request<DialogueResponse>(`/cases/${caseId}/suspects/${suspectId}/confront`, alias, {
       method: 'POST',
       body: JSON.stringify({ evidence_id: evidenceId, message }),
-    });
-  },
-  addBoardLink(caseId: string, alias: string, sourceId: string, targetId: string, linkType: string, notes: string) {
-    return request<BoardLinkResponse>(`/cases/${caseId}/board/link`, alias, {
-      method: 'POST',
-      body: JSON.stringify({
-        source_id: sourceId,
-        target_id: targetId,
-        link_type: linkType,
-        notes,
-      }),
     });
   },
   togglePin(caseId: string, alias: string, documentId: string) {
@@ -351,10 +365,12 @@ export const api = {
     formData.append('file', file);
     const response = await fetch(`${API_BASE}/authoring/cases/${caseId}/assets`, {
       method: 'POST',
+      credentials: 'include',
       headers: await authHeaders(alias),
       body: formData,
     });
     if (!response.ok) {
+      if (response.status === 401) expireSession(alias);
       const detail = await response.text();
       throw new Error(detail || `Request failed: ${response.status}`);
     }

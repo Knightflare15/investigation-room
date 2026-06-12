@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 from collections.abc import Generator
 from dataclasses import dataclass
-from urllib import error, request
 
 from ..config import Settings
 from ..models import CaseDocument, ConversationState, LoadedCase, PlayerCaseState, SearchResult, SuspectConfig
+from .providers import ProviderUnavailable, create_chat_provider
 from .retrieval import RetrievalService
 
 logger = logging.getLogger(__name__)
@@ -41,6 +40,7 @@ class DialogueService:
     def __init__(self, settings: Settings, retrieval_service: RetrievalService) -> None:
         self.settings = settings
         self.retrieval_service = retrieval_service
+        self.provider = create_chat_provider(settings)
 
     def generate(
         self,
@@ -56,14 +56,7 @@ class DialogueService:
         reply = self._call_ollama(case, suspect, conversation, state, player_message, grounding_results, evidence)
         if reply is None:
             return heuristic
-        return DialogueOutcome(
-            reply=reply,
-            new_context=heuristic.new_context,
-            revealed_fact_ids=heuristic.revealed_fact_ids,
-            suspicion_delta=heuristic.suspicion_delta,
-            guardedness_delta=heuristic.guardedness_delta,
-            trust_delta=heuristic.trust_delta,
-        )
+        return self.score_reply(suspect, conversation, player_message, grounding_results, evidence, reply=reply)
 
     def _call_ollama(
         self,
@@ -87,41 +80,23 @@ class DialogueService:
             grounding_results,
             evidence,
         )
-        req_body = json.dumps(
-            {
-                "model": self.settings.ollama_chat_model,
-                "stream": False,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": (
-                            "Reply only with the suspect's spoken words. No JSON. No narration. No speaker labels or stage directions.\n"
-                            + json.dumps(prompt_payload, separators=(",", ":"))
-                        ),
-                    },
-                ],
-            }
-        ).encode("utf-8")
-        req = request.Request(
-            f"{self.settings.ollama_base_url}/api/chat",
-            data=req_body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with request.urlopen(req, timeout=self.settings.ollama_chat_timeout_seconds) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            logger.warning("Dialogue Ollama request failed; using heuristic fallback: %s", exc)
+            content = self.provider.complete(system_prompt, prompt_payload)
+        except ProviderUnavailable as exc:
+            logger.warning("Dialogue provider %s failed; using heuristic fallback: %s", self.provider.name, exc)
             return None
-
-        content = body.get("message", {}).get("content", "")
         if not content:
-            logger.warning("Dialogue Ollama returned empty content; using heuristic fallback")
+            logger.warning("Dialogue provider returned empty content; using heuristic fallback")
             return None
         sanitized_reply = self._sanitize_reply(content, suspect)
-        if sanitized_reply is None:
+        if sanitized_reply is None or self._leaks_unrevealed_fact(
+            sanitized_reply,
+            suspect,
+            conversation,
+            player_message,
+            grounding_results,
+            evidence,
+        ):
             logger.warning("Dialogue Ollama reply leaked metadata; using heuristic fallback")
             return None
         return sanitized_reply
@@ -133,13 +108,31 @@ class DialogueService:
         player_message: str,
         grounding_results: list[SearchResult],
         evidence: CaseDocument | None,
+        reply: str | None = None,
     ) -> DialogueOutcome:
-        """Compute deterministic state deltas without an LLM call.
-
-        Returns a full DialogueOutcome; callers that already have a reply (e.g. streaming)
-        use only the delta fields and discard the heuristic reply text.
-        """
-        return self._heuristic_response(suspect, conversation, player_message, grounding_results, evidence)
+        """Compute deterministic state deltas and align reveals with the visible reply."""
+        outcome = self._heuristic_response(suspect, conversation, player_message, grounding_results, evidence)
+        if reply is None:
+            return outcome
+        revealed_fact_ids = [
+            fact_id
+            for fact_id in outcome.revealed_fact_ids
+            if self._reply_contains_fact(reply, self._fact_text(suspect, fact_id))
+        ]
+        new_context = outcome.new_context
+        if outcome.revealed_fact_ids and not revealed_fact_ids:
+            new_context = self.retrieval_service.derive_contexts(
+                " ".join(result.snippet for result in grounding_results),
+                [evidence] if evidence else None,
+            )
+        return DialogueOutcome(
+            reply=reply,
+            new_context=new_context,
+            revealed_fact_ids=revealed_fact_ids,
+            suspicion_delta=outcome.suspicion_delta,
+            guardedness_delta=outcome.guardedness_delta if revealed_fact_ids or not outcome.revealed_fact_ids else 2,
+            trust_delta=outcome.trust_delta if revealed_fact_ids or not outcome.revealed_fact_ids else 0,
+        )
 
     def _heuristic_response(
         self,
@@ -150,9 +143,7 @@ class DialogueService:
         evidence: CaseDocument | None,
     ) -> DialogueOutcome:
         personality = suspect.personality_profile
-        triggers = [trigger.lower() for trigger in suspect.dialogue_rules.pressure_triggers]
         message_tokens = _tokens(player_message)
-        matched_trigger = next((trigger for trigger in triggers if trigger in player_message.lower()), None)
         revealed_fact_ids: list[str] = []
         reply = self._baseline_reply(suspect)
         new_context: list[str] = []
@@ -160,8 +151,6 @@ class DialogueService:
         guardedness_delta = 1
         trust_delta = 0
 
-        evidence_text = evidence.body if evidence else ""
-        is_pressure = matched_trigger is not None or bool(_tokens(evidence_text) & message_tokens)
         protective_pressure = self._is_protective_pressure(suspect, player_message, grounding_results, evidence)
         if protective_pressure:
             guardedness_delta += 2
@@ -169,55 +158,30 @@ class DialogueService:
             suspicion_delta += 2
 
         available_facts = suspect.private_truth.facts_known + suspect.private_truth.secrets
-        if is_pressure and len(conversation.revealed_fact_ids) < len(available_facts):
-            fact_index = len(conversation.revealed_fact_ids)
+        fact_index = self._eligible_fact_index(suspect, conversation, player_message, grounding_results, evidence)
+        if fact_index is not None and fact_index < len(available_facts):
             revealed = available_facts[fact_index]
             revealed_fact_ids.append(f"fact_{fact_index}")
             new_context = self.retrieval_service.derive_contexts(revealed)
-            reply = self._spoken_reply(
-                suspect,
-                f"{revealed} That is all I am saying about it.",
-                include_catchphrase=False,
-            )
+            reply = self._revealed_fact_reply(suspect, conversation, revealed)
             guardedness_delta = 4
             trust_delta = -1 if suspect.private_truth.secrets else 1
             suspicion_delta += 6
         elif evidence:
-            reply = self._spoken_reply(
-                suspect,
-                (
-                    f"{self._lie_opening(suspect)}That document proves less than you think. "
-                    f"{self._protective_pushback(suspect)}"
-                ).strip(),
-                include_catchphrase=True,
-            )
+            reply = self._evidence_reply(suspect, conversation, evidence.title)
             new_context = self.retrieval_service.derive_contexts(evidence.body, [evidence])
             guardedness_delta = 5
             suspicion_delta += 5
         elif grounding_results:
             primary = grounding_results[0]
-            reply = self._spoken_reply(
-                suspect,
-                (
-                    f"I know what those records suggest, but they leave out context. "
-                    f"{self._protective_pushback(suspect)}"
-                ),
-                include_catchphrase=True,
-            )
+            reply = self._grounded_reply(suspect, conversation, player_message, primary.title)
             new_context = self.retrieval_service.derive_contexts(
                 " ".join(result.snippet for result in grounding_results),
             )
             guardedness_delta = 2
             suspicion_delta += 3
         else:
-            reply = self._spoken_reply(
-                suspect,
-                (
-                    "I have already told the police what I know. "
-                    f"{self._protective_pushback(suspect)}Ask a direct question if you want a direct answer."
-                ),
-                include_catchphrase=not conversation.transcript,
-            )
+            reply = self._ungrounded_reply(suspect, conversation, player_message)
             new_context = self.retrieval_service.derive_contexts(suspect.public_profile.summary)
 
         if protective_pressure and personality.protective_reason:
@@ -255,66 +219,25 @@ class DialogueService:
             "interrogation_system",
             "You are a suspect in a detective game. Stay consistent with the supplied facts and answer only as the suspect.",
         )
-        prompt_payload = {
-            "suspect": self._build_stream_suspect_payload(suspect),
-            "player_message": player_message,
-            "previous_session_summary": conversation.memory_summary,
-            "trust": conversation.trust,
-            "guardedness": conversation.guardedness,
-            "evidence_title": evidence.title if evidence else None,
-            "grounding": [
-                {
-                    "chunk_id": result.chunk_id,
-                    "document_id": result.document_id,
-                    "title": result.title,
-                    "snippet": result.snippet,
-                }
-                for result in grounding_results
-            ],
-        }
-        req_body = json.dumps(
-            {
-                "model": self.settings.ollama_chat_model,
-                "stream": True,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": (
-                            "Reply only with the suspect's spoken words. No JSON. No narration. No stage directions.\n"
-                            + json.dumps(prompt_payload, separators=(",", ":"))
-                        ),
-                    },
-                ],
-            }
-        ).encode("utf-8")
-        req = request.Request(
-            f"{self.settings.ollama_base_url}/api/chat",
-            data=req_body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        prompt_payload = self._build_prompt_payload(
+            suspect, conversation, state, player_message, grounding_results, evidence
         )
         try:
-            with request.urlopen(req, timeout=self.settings.ollama_stream_timeout_seconds) as resp:
-                saw_token = False
-                for raw_line in resp:
-                    line = raw_line.decode("utf-8").strip()
-                    if not line:
-                        continue
-                    try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    token = chunk.get("message", {}).get("content", "")
-                    if token:
-                        saw_token = True
-                        yield token
-                    if chunk.get("done"):
-                        break
-                if not saw_token:
-                    raise error.URLError("empty Ollama stream")
-        except (error.URLError, TimeoutError) as exc:
-            logger.warning("Dialogue Ollama stream failed; using heuristic fallback: %s", exc)
+            raw_reply = "".join(self.provider.stream(system_prompt, prompt_payload))
+            sanitized = self._sanitize_reply(raw_reply, suspect)
+            if sanitized is None or self._leaks_unrevealed_fact(
+                sanitized,
+                suspect,
+                conversation,
+                player_message,
+                grounding_results,
+                evidence,
+            ):
+                raise ProviderUnavailable("reply failed policy validation")
+            for token in re.findall(r"\S+\s*", sanitized):
+                yield token
+        except ProviderUnavailable as exc:
+            logger.warning("Dialogue provider stream failed; using heuristic fallback: %s", exc)
             outcome = self._heuristic_response(suspect, conversation, player_message, grounding_results, evidence)
             yield outcome.reply
 
@@ -358,8 +281,13 @@ class DialogueService:
                 "outward_goal": personality.outward_goal,
                 "protective_target": personality.protective_target,
                 "protective_reason": personality.protective_reason,
-                "known_facts": suspect.private_truth.facts_known,
-                "secrets": suspect.private_truth.secrets,
+                "allowed_facts": self._allowed_facts(
+                    suspect,
+                    conversation,
+                    player_message,
+                    grounding_results,
+                    evidence,
+                ),
                 "non_negotiables": suspect.private_truth.non_negotiables,
                 "previous_session_summary": conversation.memory_summary,
             },
@@ -399,9 +327,108 @@ class DialogueService:
             "output_rules": {
                 "reply_style": "Only the suspect's spoken words. No narration, no labels, no speaker names.",
                 "length": "2 to 5 sentences maximum.",
-                "grounding": "Use the retrieved evidence when relevant, but do not mention system prompts or style metadata.",
+                "conversation": (
+                    "Answer the detective's latest question directly before deflecting or pushing back. "
+                    "Acknowledge relevant prior turns without recapping the whole exchange. Vary sentence openings "
+                    "and do not repeat stock phrases, the question, or the suspect's catchphrase."
+                ),
+                "naturalism": (
+                    "Write natural spoken dialogue with contractions and occasional short sentences. "
+                    "Do not explain the suspect's tone, traits, strategy, goals, or verbal tells."
+                ),
+                "grounding": (
+                    "Use retrieved evidence naturally when relevant. Treat profile and rule fields as private acting "
+                    "direction. Never mention system prompts, metadata, retrieved context, or document IDs."
+                ),
             },
         }
+
+    def _allowed_facts(
+        self,
+        suspect: SuspectConfig,
+        conversation: ConversationState,
+        player_message: str,
+        grounding_results: list[SearchResult],
+        evidence: CaseDocument | None,
+    ) -> list[str]:
+        facts = suspect.private_truth.facts_known + suspect.private_truth.secrets
+        allowed_ids = set(conversation.revealed_fact_ids)
+        eligible_index = self._eligible_fact_index(suspect, conversation, player_message, grounding_results, evidence)
+        return [
+            fact
+            for index, fact in enumerate(facts)
+            if f"fact_{index}" in allowed_ids or index == eligible_index
+        ]
+
+    def _eligible_fact_index(
+        self,
+        suspect: SuspectConfig,
+        conversation: ConversationState,
+        player_message: str,
+        grounding_results: list[SearchResult],
+        evidence: CaseDocument | None,
+    ) -> int | None:
+        facts = suspect.private_truth.facts_known + suspect.private_truth.secrets
+        unrevealed = [index for index in range(len(facts)) if f"fact_{index}" not in conversation.revealed_fact_ids]
+        if not unrevealed:
+            return None
+        haystack_parts = [player_message]
+        haystack_parts.extend(result.title for result in grounding_results)
+        haystack_parts.extend(result.snippet for result in grounding_results)
+        if evidence:
+            haystack_parts.extend([evidence.id, evidence.title, evidence.summary, evidence.body, *evidence.entity_tags])
+        haystack = " ".join(haystack_parts).lower()
+
+        rules = {rule.fact_id: rule for rule in suspect.dialogue_rules.fact_reveal_rules}
+        for index in unrevealed:
+            rule = rules.get(f"fact_{index}")
+            if rule is None:
+                triggers = suspect.dialogue_rules.pressure_triggers
+                if any(trigger.lower() in haystack for trigger in triggers):
+                    return index
+                continue
+            if conversation.trust < rule.min_trust or conversation.guardedness > rule.max_guardedness:
+                continue
+            topic_match = not rule.topics or any(topic.lower() in haystack for topic in rule.topics)
+            evidence_match = not rule.evidence_ids or bool(evidence and evidence.id in rule.evidence_ids)
+            if topic_match and evidence_match:
+                return index
+        return None
+
+    def _fact_text(self, suspect: SuspectConfig, fact_id: str) -> str:
+        facts = suspect.private_truth.facts_known + suspect.private_truth.secrets
+        try:
+            index = int(fact_id.removeprefix("fact_"))
+        except ValueError:
+            return ""
+        return facts[index] if 0 <= index < len(facts) else ""
+
+    def _reply_contains_fact(self, reply: str, fact: str) -> bool:
+        meaningful = {token for token in _tokens(fact) if len(token) > 4}
+        if not meaningful:
+            return False
+        overlap = meaningful & _tokens(reply)
+        return len(overlap) >= min(3, max(1, (len(meaningful) + 1) // 2))
+
+    def _leaks_unrevealed_fact(
+        self,
+        reply: str,
+        suspect: SuspectConfig,
+        conversation: ConversationState,
+        player_message: str,
+        grounding_results: list[SearchResult],
+        evidence: CaseDocument | None,
+    ) -> bool:
+        facts = suspect.private_truth.facts_known + suspect.private_truth.secrets
+        allowed_facts = set(self._allowed_facts(suspect, conversation, player_message, grounding_results, evidence))
+        reply_tokens = _tokens(reply)
+        for fact in facts:
+            if fact in allowed_facts:
+                continue
+            meaningful = {token for token in _tokens(fact) if len(token) > 5}
+            if len(meaningful & reply_tokens) >= min(3, max(1, len(meaningful))):
+                return True
+        return False
 
     def _build_stream_suspect_payload(self, suspect: SuspectConfig) -> dict[str, object]:
         personality = suspect.personality_profile
@@ -471,14 +498,143 @@ class DialogueService:
     def _lie_opening(self, suspect: SuspectConfig) -> str:
         strategy = suspect.dialogue_rules.lie_strategy.lower()
         if "deny" in strategy:
-            return "That is not what happened. "
+            return "No. That isn't what happened. "
         if "deflect" in strategy:
-            return "You are asking the wrong question. "
+            return "You're asking the wrong question. "
         if "minimize" in strategy:
-            return "You are making too much of an administrative detail. "
+            return "You're making too much of an administrative detail. "
         if "admit fragments" in strategy:
-            return "You are only seeing part of the picture. "
-        return "You are reaching. "
+            return "You're only seeing part of the picture. "
+        return "You're reaching. "
+
+    def _revealed_fact_reply(
+        self,
+        suspect: SuspectConfig,
+        conversation: ConversationState,
+        revealed: str,
+    ) -> str:
+        openings = (
+            "Fine. Here's what I know:",
+            "All right. This is the part I held back:",
+            "You want the truth? Here it is:",
+        )
+        opening = openings[self._reply_variant(conversation, len(openings))]
+        closing = (
+            "That's all I can tell you.",
+            "Don't turn that into something it isn't.",
+            "I'm not going any further than that.",
+        )[self._reply_variant(conversation, 3, offset=1)]
+        return self._spoken_reply(suspect, f"{opening} {revealed} {closing}", include_catchphrase=False)
+
+    def _evidence_reply(
+        self,
+        suspect: SuspectConfig,
+        conversation: ConversationState,
+        evidence_title: str,
+    ) -> str:
+        strategy = suspect.dialogue_rules.lie_strategy.lower()
+        if "deny" in strategy:
+            core = f"I've seen {evidence_title}. It doesn't put me where you're trying to put me."
+        elif "deflect" in strategy:
+            core = f"{evidence_title} raises a question, but it doesn't answer the one you're asking."
+        elif "minimize" in strategy:
+            core = f"{evidence_title} records an irregularity, not a crime."
+        elif "admit fragments" in strategy:
+            core = f"There's something useful in {evidence_title}, yes. You're still missing why it matters."
+        else:
+            core = f"I know what {evidence_title} says. It proves less than you think."
+        return self._join_pushback(suspect, conversation, core)
+
+    def _grounded_reply(
+        self,
+        suspect: SuspectConfig,
+        conversation: ConversationState,
+        player_message: str,
+        source_title: str,
+    ) -> str:
+        intent = self._question_intent(player_message)
+        repeated = self._is_repeated_topic(conversation, player_message)
+        prefix = "We've already been over this. " if repeated else ""
+        strategy = suspect.dialogue_rules.lie_strategy.lower()
+
+        if intent == "accusation":
+            core = f"{prefix}No. {source_title} doesn't make your accusation true."
+        elif intent == "why":
+            core = f"{prefix}Because {source_title} leaves out the decisions people made around it."
+        elif intent == "timeline":
+            core = f"{prefix}The timeline in {source_title} is incomplete. That's the honest answer."
+        elif intent == "person":
+            core = f"{prefix}I know what {source_title} suggests about them. Suggestion isn't proof."
+        elif "deflect" in strategy:
+            core = f"{prefix}You're reading too much into {source_title}. Ask what it actually establishes."
+        elif "minimize" in strategy:
+            core = f"{prefix}{source_title} makes a routine detail look suspicious after the fact."
+        elif "admit fragments" in strategy:
+            core = f"{prefix}{source_title} has one part right. I'm not convinced you understand which part."
+        else:
+            core = f"{prefix}I know what {source_title} suggests, but it leaves out context."
+        return self._join_pushback(suspect, conversation, core)
+
+    def _ungrounded_reply(
+        self,
+        suspect: SuspectConfig,
+        conversation: ConversationState,
+        player_message: str,
+    ) -> str:
+        intent = self._question_intent(player_message)
+        repeated = self._is_repeated_topic(conversation, player_message)
+        if repeated:
+            core = "You're asking me the same thing again. My answer hasn't changed."
+        elif intent == "accusation":
+            core = f"{self._lie_opening(suspect)}If you have evidence, show it to me."
+        elif intent == "why":
+            core = "I can't explain a decision you haven't identified. Be specific."
+        elif intent == "timeline":
+            core = "Give me a time and a place, and I'll tell you what I remember."
+        elif intent == "person":
+            core = "Ask me what you actually want to know about them."
+        else:
+            core = "That's too broad. Ask me about a person, a place, or a specific record."
+        return self._join_pushback(suspect, conversation, core)
+
+    def _join_pushback(
+        self,
+        suspect: SuspectConfig,
+        conversation: ConversationState,
+        core: str,
+    ) -> str:
+        pushback = self._protective_pushback(suspect)
+        if not pushback or self._reply_variant(conversation, 3) == 0:
+            return self._spoken_reply(suspect, core, include_catchphrase=False)
+        return self._spoken_reply(suspect, f"{core} {pushback}", include_catchphrase=False)
+
+    def _question_intent(self, player_message: str) -> str:
+        tokens = _tokens(player_message)
+        lowered = player_message.lower()
+        if tokens & {"accuse", "accusing", "culprit", "guilty", "killed", "murdered"} or "did you do it" in lowered:
+            return "accusation"
+        if tokens & {"when", "where", "timeline", "alibi"}:
+            return "timeline"
+        if tokens & {"who", "he", "she", "they", "them"}:
+            return "person"
+        if "why" in tokens or "motive" in tokens:
+            return "why"
+        return "general"
+
+    def _is_repeated_topic(self, conversation: ConversationState, player_message: str) -> bool:
+        current = {token for token in _tokens(player_message) if len(token) > 3}
+        if not current:
+            return False
+        previous_questions = [
+            turn.text
+            for turn in conversation.transcript[-6:]
+            if turn.speaker.lower() == "detective"
+        ]
+        return any(len(current & _tokens(question)) >= min(2, len(current)) for question in previous_questions)
+
+    def _reply_variant(self, conversation: ConversationState, count: int, offset: int = 0) -> int:
+        suspect_turns = sum(1 for turn in conversation.transcript if turn.speaker.lower() != "detective")
+        return (suspect_turns + offset) % count
 
     def _protective_pushback(self, suspect: SuspectConfig) -> str:
         target = suspect.personality_profile.protective_target.strip()

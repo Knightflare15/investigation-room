@@ -7,10 +7,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from .models import AuthUserRecord, CommunityExcerpt, CommunityStatsResponse, ConversationState, PlayerCaseState
+from .models import AuthoringBundle, AuthUserRecord, CommunityExcerpt, CommunityStatsResponse, ConversationState, PlayerCaseState, SessionRecord
 
 
 POSTGRES_SCHEMA = """
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TABLE IF NOT EXISTS player_case_states (
     case_id TEXT NOT NULL,
     player_alias TEXT NOT NULL,
@@ -54,9 +56,85 @@ CREATE TABLE IF NOT EXISTS theory_submissions (
 );
 
 CREATE TABLE IF NOT EXISTS auth_users (
+    id TEXT UNIQUE NOT NULL,
     alias TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'player',
     created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    role TEXT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS rate_limit_events (
+    bucket TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    occurred_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rate_limit_events_lookup ON rate_limit_events(bucket, subject, occurred_at);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    actor_alias TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS case_assets (
+    case_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    public_url TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (case_id, path)
+);
+
+CREATE TABLE IF NOT EXISTS production_cases (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT,
+    status TEXT NOT NULL,
+    owner_alias TEXT,
+    version INTEGER NOT NULL,
+    bundle JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS case_versions (
+    case_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    bundle JSONB NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (case_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS case_documents (
+    case_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    document_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    entity_tags JSONB NOT NULL,
+    PRIMARY KEY (case_id, version, document_id)
+);
+
+CREATE TABLE IF NOT EXISTS retrieval_chunks (
+    chunk_id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    document_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    text TEXT NOT NULL,
+    embedding VECTOR(768)
 );
 """
 
@@ -104,9 +182,85 @@ CREATE TABLE IF NOT EXISTS theory_submissions (
 );
 
 CREATE TABLE IF NOT EXISTS auth_users (
+    id TEXT UNIQUE NOT NULL,
     alias TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'player',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    role TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS rate_limit_events (
+    bucket TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    occurred_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rate_limit_events_lookup ON rate_limit_events(bucket, subject, occurred_at);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_alias TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS case_assets (
+    case_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    public_url TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (case_id, path)
+);
+
+CREATE TABLE IF NOT EXISTS production_cases (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT,
+    status TEXT NOT NULL,
+    owner_alias TEXT,
+    version INTEGER NOT NULL,
+    bundle TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS case_versions (
+    case_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    bundle TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (case_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS case_documents (
+    case_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    document_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    entity_tags TEXT NOT NULL,
+    PRIMARY KEY (case_id, version, document_id)
+);
+
+CREATE TABLE IF NOT EXISTS retrieval_chunks (
+    chunk_id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    document_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    text TEXT NOT NULL,
+    embedding TEXT
 );
 """
 
@@ -344,24 +498,193 @@ class BaseDatabase(ABC):
 
     def load_auth_user(self, alias: str) -> AuthUserRecord | None:
         rows = self._execute(
-            "SELECT alias, password_hash FROM auth_users WHERE alias = {p}".format(p=self._ph),
+            "SELECT id, alias, password_hash, role FROM auth_users WHERE alias = {p}".format(p=self._ph),
             (alias,),
         )
         if not rows:
             return None
         row = rows[0]
-        return AuthUserRecord(alias=_row_value(row, "alias"), password_hash=_row_value(row, "password_hash"))
+        return AuthUserRecord(
+            id=_row_value(row, "id"),
+            alias=_row_value(row, "alias"),
+            password_hash=_row_value(row, "password_hash"),
+            role=_row_value(row, "role"),
+        )
 
     def create_auth_user(self, user: AuthUserRecord) -> None:
         p = self._ph
         self._execute_write(
-            f"INSERT INTO auth_users (alias, password_hash) VALUES ({p}, {p})",
-            (user.alias, user.password_hash),
+            f"INSERT INTO auth_users (id, alias, password_hash, role) VALUES ({p}, {p}, {p}, {p})",
+            (user.id, user.alias, user.password_hash, user.role),
         )
+
+    def update_auth_password(self, alias: str, password_hash: str) -> None:
+        self._execute_write(
+            "UPDATE auth_users SET password_hash = {p} WHERE alias = {p}".format(p=self._ph),
+            (password_hash, alias),
+        )
+
+    def create_session(self, session: SessionRecord) -> None:
+        p = self._ph
+        self._execute_write(
+            f"INSERT INTO auth_sessions (token_hash, user_id, alias, role, expires_at) VALUES ({p}, {p}, {p}, {p}, {p})",
+            (session.token_hash, session.user_id, session.alias, session.role, session.expires_at),
+        )
+
+    def load_session(self, token_hash: str, now_epoch: int) -> SessionRecord | None:
+        p = self._ph
+        rows = self._execute(
+            f"SELECT token_hash, user_id, alias, role, expires_at FROM auth_sessions WHERE token_hash = {p} AND expires_at > {p}",
+            (token_hash, now_epoch),
+        )
+        if not rows:
+            return None
+        return SessionRecord.model_validate(rows[0])
+
+    def revoke_session(self, token_hash: str) -> None:
+        self._execute_write("DELETE FROM auth_sessions WHERE token_hash = {p}".format(p=self._ph), (token_hash,))
+
+    def consume_rate_limit(self, bucket: str, subject: str, limit: int, window_seconds: int, now_epoch: int) -> bool:
+        p = self._ph
+        cutoff = now_epoch - window_seconds
+        self._execute_write(
+            f"DELETE FROM rate_limit_events WHERE bucket = {p} AND subject = {p} AND occurred_at <= {p}",
+            (bucket, subject, cutoff),
+        )
+        rows = self._execute(
+            f"SELECT COUNT(*) AS count FROM rate_limit_events WHERE bucket = {p} AND subject = {p} AND occurred_at > {p}",
+            (bucket, subject, cutoff),
+        )
+        if int(rows[0]["count"]) >= limit:
+            return False
+        self._execute_write(
+            f"INSERT INTO rate_limit_events (bucket, subject, occurred_at) VALUES ({p}, {p}, {p})",
+            (bucket, subject, now_epoch),
+        )
+        return True
+
+    def write_audit_log(self, actor_alias: str, action: str, target: str, metadata: dict[str, Any] | None = None) -> None:
+        p = self._ph
+        self._execute_write(
+            f"INSERT INTO audit_logs (actor_alias, action, target, metadata) VALUES ({p}, {p}, {p}, {p})",
+            (actor_alias, action, target, self._json(metadata or {})),
+        )
+
+    def save_case_asset(self, case_id: str, path: str, public_url: str, content_type: str, size_bytes: int) -> None:
+        p = self._ph
+        self._execute_write(
+            f"""
+            INSERT INTO case_assets (case_id, path, public_url, content_type, size_bytes)
+            VALUES ({p}, {p}, {p}, {p}, {p})
+            ON CONFLICT(case_id, path) DO UPDATE SET
+                public_url = {self._excluded}public_url,
+                content_type = {self._excluded}content_type,
+                size_bytes = {self._excluded}size_bytes
+            """,
+            (case_id, path, public_url, content_type, size_bytes),
+        )
+
+    def list_case_assets(self, case_id: str) -> list[dict[str, Any]]:
+        return self._execute(
+            "SELECT path, public_url, content_type, size_bytes FROM case_assets WHERE case_id = {p} ORDER BY path".format(p=self._ph),
+            (case_id,),
+        )
+
+    def save_case_bundle(self, bundle: AuthoringBundle) -> None:
+        p = self._ph
+        self._execute_write(
+            f"""
+            INSERT INTO production_cases (id, owner_user_id, status, owner_alias, version, bundle)
+            VALUES ({p}, {p}, {p}, {p}, {p}, {p})
+            ON CONFLICT(id) DO UPDATE SET
+                owner_user_id = {self._excluded}owner_user_id,
+                status = {self._excluded}status,
+                owner_alias = {self._excluded}owner_alias,
+                version = {self._excluded}version,
+                bundle = {self._excluded}bundle,
+                updated_at = {self._now}
+            """,
+            (
+                bundle.case.id,
+                bundle.case.owner_user_id,
+                bundle.case.status,
+                bundle.case.owner_alias,
+                bundle.case.version,
+                self._json(bundle.model_dump(mode="json")),
+            ),
+        )
+        self._execute_write(
+            f"""
+            INSERT INTO case_versions (case_id, version, bundle, created_by)
+            VALUES ({p}, {p}, {p}, {p})
+            ON CONFLICT(case_id, version) DO UPDATE SET bundle = {self._excluded}bundle
+            """,
+            (bundle.case.id, bundle.case.version, self._json(bundle.model_dump(mode="json")), bundle.case.owner_alias or "system"),
+        )
+        self._execute_write(
+            f"DELETE FROM case_documents WHERE case_id = {p} AND version = {p}",
+            (bundle.case.id, bundle.case.version),
+        )
+        for document in bundle.documents:
+            self._execute_write(
+                f"""
+                INSERT INTO case_documents (case_id, version, document_id, title, body, entity_tags)
+                VALUES ({p}, {p}, {p}, {p}, {p}, {p})
+                """,
+                (bundle.case.id, bundle.case.version, document.id, document.title, document.body, self._json(document.entity_tags)),
+            )
+
+    def load_case_bundle(self, case_id: str) -> AuthoringBundle | None:
+        rows = self._execute(
+            "SELECT bundle FROM production_cases WHERE id = {p}".format(p=self._ph),
+            (case_id,),
+        )
+        if not rows:
+            return None
+        return AuthoringBundle.model_validate(_load_json(rows[0]["bundle"]))
+
+    def list_case_bundles(self) -> list[AuthoringBundle]:
+        rows = self._execute("SELECT bundle FROM production_cases ORDER BY id")
+        return [AuthoringBundle.model_validate(_load_json(row["bundle"])) for row in rows]
+
+    def delete_case_bundle(self, case_id: str) -> None:
+        p = self._ph
+        for table in (
+            "retrieval_chunks",
+            "case_documents",
+            "case_versions",
+            "case_assets",
+            "conversation_states",
+            "player_case_states",
+            "theory_submissions",
+        ):
+            self._execute_write(f"DELETE FROM {table} WHERE case_id = {p}", (case_id,))
+        self._execute_write(f"DELETE FROM production_cases WHERE id = {p}", (case_id,))
+
+    def replace_retrieval_chunks(
+        self,
+        case_id: str,
+        version: int,
+        chunks: list[tuple[str, str, str, str, list[float] | None]],
+    ) -> None:
+        p = self._ph
+        self._execute_write(f"DELETE FROM retrieval_chunks WHERE case_id = {p} AND version = {p}", (case_id, version))
+        for chunk_id, document_id, content_hash, text, embedding in chunks:
+            self._execute_write(
+                f"""
+                INSERT INTO retrieval_chunks (chunk_id, case_id, version, document_id, content_hash, text, embedding)
+                VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p})
+                """,
+                (chunk_id, case_id, version, document_id, content_hash, text, self._vector(embedding)),
+            )
 
     # ------------------------------------------------------------------ #
     # Subclass hooks — override these, not the methods above              #
     # ------------------------------------------------------------------ #
+
+    @property
+    def supports_vector_index(self) -> bool:
+        return False
 
     @property
     def _ph(self) -> str:
@@ -381,6 +704,9 @@ class BaseDatabase(ABC):
     def _json(self, value: Any) -> Any:
         """Serialise a value for storage."""
         return _dump_json(value)
+
+    def _vector(self, value: list[float] | None) -> Any:
+        return _dump_json(value) if value is not None else None
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -414,6 +740,15 @@ class SQLiteDatabase(BaseDatabase):
                 connection.execute(
                     "ALTER TABLE player_case_states ADD COLUMN completed_deduction_ids TEXT NOT NULL DEFAULT '[]'"
                 )
+            auth_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(auth_users)").fetchall()
+            }
+            if "id" not in auth_columns:
+                connection.execute("ALTER TABLE auth_users ADD COLUMN id TEXT")
+                connection.execute("UPDATE auth_users SET id = lower(hex(randomblob(16))) WHERE id IS NULL")
+            if "role" not in auth_columns:
+                connection.execute("ALTER TABLE auth_users ADD COLUMN role TEXT NOT NULL DEFAULT 'player'")
 
     def _execute(self, sql: str, params: tuple = ()) -> list[Any]:
         with self._connection() as connection:
@@ -457,6 +792,9 @@ class PostgresDatabase(BaseDatabase):
                 cursor.execute(
                     "ALTER TABLE player_case_states ADD COLUMN IF NOT EXISTS completed_deduction_ids JSONB NOT NULL DEFAULT '[]'::jsonb"
                 )
+                cursor.execute("ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS id TEXT")
+                cursor.execute("UPDATE auth_users SET id = md5(alias || created_at::text) WHERE id IS NULL")
+                cursor.execute("ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'player'")
 
     def _execute(self, sql: str, params: tuple = ()) -> list[Any]:
         with self._connection() as connection:
@@ -468,6 +806,10 @@ class PostgresDatabase(BaseDatabase):
         with self._connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(sql, params)
+
+    @property
+    def supports_vector_index(self) -> bool:
+        return True
 
     @property
     def _ph(self) -> str:
@@ -484,6 +826,9 @@ class PostgresDatabase(BaseDatabase):
     def _json(self, value: Any) -> Any:
         # Pass a Jsonb wrapper so psycopg3 serialises it without needing ::jsonb casts in SQL
         return self.Jsonb(value)
+
+    def _vector(self, value: list[float] | None) -> Any:
+        return "[" + ",".join(str(item) for item in value) + "]" if value is not None else None
 
 
 def create_database(database_url: str | None, db_path: Path) -> BaseDatabase:

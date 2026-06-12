@@ -11,6 +11,7 @@ import type {
   CaseDocument,
   CreateCaseRequest,
   LocationDossier,
+  SessionRole,
   SourceGrounding,
 } from './types';
 import { MediaPlate, PanelHeader } from './ui';
@@ -18,6 +19,7 @@ import { MediaPlate, PanelHeader } from './ui';
 type Props = {
   alias: string;
   currentCaseId: string;
+  role: SessionRole;
   onPlayableCasesChanged: (caseId?: string) => Promise<void> | void;
   onSelectCase: (caseId: string) => void;
   onDeleteCase?: (caseId: string) => Promise<void>;
@@ -260,7 +262,7 @@ function toOptions(assets: AssetEntry[], kind: string) {
   return assets.filter((asset) => asset.kind === kind);
 }
 
-function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelectCase, onDeleteCase }: Props) {
+function AuthoringStudio({ alias, currentCaseId, role, onPlayableCasesChanged, onSelectCase, onDeleteCase }: Props) {
   const [bundles, setBundles] = useState<AuthoringBundle[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState(currentCaseId);
   const [draft, setDraft] = useState<AuthoringBundle | null>(null);
@@ -274,6 +276,7 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
   const [sourceGroundings, setSourceGroundings] = useState<SourceGrounding[]>([]);
   const [advancedRescanRules, setAdvancedRescanRules] = useState('[]');
   const [advancedBoardLinks, setAdvancedBoardLinks] = useState('[]');
+  const [advancedCanonicalTruth, setAdvancedCanonicalTruth] = useState('{}');
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [reviewPrompt, setReviewPrompt] = useState('');
   const [reviewRegenerating, setReviewRegenerating] = useState(false);
@@ -315,6 +318,7 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
     setReviewModalOpen(false);
     setAdvancedRescanRules(JSON.stringify(bundle.case.rescan_rules, null, 2));
     setAdvancedBoardLinks(JSON.stringify(bundle.case.valid_board_links, null, 2));
+    setAdvancedCanonicalTruth(JSON.stringify(bundle.case.submission.canonical_truth, null, 2));
   }
 
   function updateDraft(next: AuthoringBundle) {
@@ -417,6 +421,7 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
     try {
       next.case.rescan_rules = JSON.parse(advancedRescanRules);
       next.case.valid_board_links = JSON.parse(advancedBoardLinks);
+      next.case.submission.canonical_truth = JSON.parse(advancedCanonicalTruth);
       const saved = await api.saveAuthoringCase(next.case.id, alias, next);
       setDraft(saved);
       setGenerationWarnings([]);
@@ -530,14 +535,14 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
     }
   }
 
-  async function handleDeleteCurrentDraft() {
-    if (!draft || draft.case.status !== 'draft' || !onDeleteCase) return;
+  async function handleDeleteCurrentCase() {
+    if (!draft || !onDeleteCase || (draft.case.status === 'approved' && role !== 'admin')) return;
     try {
       await onDeleteCase(draft.case.id);
       setDraft(null);
       setSelectedCaseId('');
       setReviewModalOpen(false);
-      setStatus(`Deleted draft ${draft.case.title}.`);
+      setStatus(`Deleted ${draft.case.status === 'approved' ? 'case' : 'draft'} ${draft.case.title}.`);
     } catch (error) {
       setStatus((error as Error).message);
     }
@@ -556,9 +561,9 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
                 Review Extraction
               </button>
             ) : null}
-            {draft?.case.status === 'draft' && onDeleteCase ? (
-              <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void handleDeleteCurrentDraft()}>
-                Delete Draft
+            {draft && onDeleteCase && (draft.case.status === 'draft' || role === 'admin') ? (
+              <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void handleDeleteCurrentCase()}>
+                {draft.case.status === 'approved' ? 'Delete Case' : 'Delete Draft'}
               </button>
             ) : null}
             {status ? <div className="status-chip">{status}</div> : null}
@@ -988,6 +993,7 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
                       baseline_tone: 'guarded',
                       lie_strategy: 'evade until confronted',
                       pressure_triggers: [],
+                      fact_reveal_rules: [],
                       shut_down_threshold: 75,
                     },
                     memory_rules: {
@@ -1107,6 +1113,10 @@ function AuthoringStudio({ alias, currentCaseId, onPlayableCasesChanged, onSelec
               <label>
                 Valid Board Links JSON
                 <textarea value={advancedBoardLinks} onChange={(event) => setAdvancedBoardLinks(event.target.value)} />
+              </label>
+              <label>
+                Canonical Truth and Scoring JSON
+                <textarea value={advancedCanonicalTruth} onChange={(event) => setAdvancedCanonicalTruth(event.target.value)} />
               </label>
             </section>
           </div>

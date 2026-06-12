@@ -39,6 +39,11 @@
         "baseline_tone": "controlled and measured",
         "lie_strategy": "deny until confronted with specific records",
         "pressure_triggers": ["calendar", "hotel", "financial motive", "Harbor Office"],
+        "fact_reveal_rules": [
+          {"fact_id": "fact_0", "topics": ["partnership", "financial motive"], "evidence_ids": [], "min_trust": 40, "max_guardedness": 80},
+          {"fact_id": "fact_1", "topics": ["Harbor Office"], "evidence_ids": ["doc_detective_supplement"], "min_trust": 40, "max_guardedness": 85},
+          {"fact_id": "fact_2", "topics": ["calendar"], "evidence_ids": ["doc_call_log"], "min_trust": 40, "max_guardedness": 90}
+        ],
         "shut_down_threshold": 75
       },
       "memory_rules": {
@@ -86,6 +91,11 @@
         "baseline_tone": "gentle but professionally guarded",
         "lie_strategy": "deflect through ethics and confidentiality",
         "pressure_triggers": ["sedative", "medical note", "confidentiality"],
+        "fact_reveal_rules": [
+          {"fact_id": "fact_0", "topics": ["sedative"], "evidence_ids": ["doc_autopsy"], "min_trust": 40, "max_guardedness": 80},
+          {"fact_id": "fact_1", "topics": ["Adrian", "fear"], "evidence_ids": [], "min_trust": 45, "max_guardedness": 85},
+          {"fact_id": "fact_2", "topics": ["medical note"], "evidence_ids": ["doc_detective_supplement"], "min_trust": 45, "max_guardedness": 90}
+        ],
         "shut_down_threshold": 75
       },
       "memory_rules": {
@@ -133,6 +143,11 @@
         "baseline_tone": "polite, clipped, and slightly irritated",
         "lie_strategy": "minimize administrative irregularities",
         "pressure_triggers": ["ledger", "suite", "Lena Orlov", "Ashdown Suite"],
+        "fact_reveal_rules": [
+          {"fact_id": "fact_0", "topics": ["suite", "ledger"], "evidence_ids": ["doc_hotel_ledger"], "min_trust": 40, "max_guardedness": 80},
+          {"fact_id": "fact_1", "topics": ["Lena Orlov"], "evidence_ids": ["doc_hotel_ledger"], "min_trust": 40, "max_guardedness": 85},
+          {"fact_id": "fact_2", "topics": ["ledger", "police"], "evidence_ids": ["doc_hotel_ledger"], "min_trust": 40, "max_guardedness": 90}
+        ],
         "shut_down_threshold": 80
       },
       "memory_rules": {
@@ -180,6 +195,11 @@
         "baseline_tone": "coolly amused and observant",
         "lie_strategy": "admit fragments while protecting leverage",
         "pressure_triggers": ["suite", "investor", "phone", "Mara Voss"],
+        "fact_reveal_rules": [
+          {"fact_id": "fact_0", "topics": ["suite", "investor"], "evidence_ids": ["doc_hotel_ledger"], "min_trust": 40, "max_guardedness": 80},
+          {"fact_id": "fact_1", "topics": ["Mara Voss"], "evidence_ids": ["doc_call_log"], "min_trust": 40, "max_guardedness": 85},
+          {"fact_id": "fact_2", "topics": ["phone"], "evidence_ids": ["doc_call_log"], "min_trust": 40, "max_guardedness": 90}
+        ],
         "shut_down_threshold": 85
       },
       "memory_rules": {

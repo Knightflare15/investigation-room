@@ -1,13 +1,22 @@
-import type { CommunityStatsResponse, Suspect } from '../types';
+import type { CommunityStatsResponse, Suspect, TheoryScore } from '../types';
 import { PanelHeader, SuspicionMeter } from '../ui';
 
 type Props = {
   suspects: Suspect[];
   communityStats: CommunityStatsResponse;
+  theoryScore: TheoryScore | null;
   onRestartCase: () => Promise<void>;
 };
 
-export default function CommunityView({ suspects, communityStats, onRestartCase }: Props) {
+export default function CommunityView({ suspects, communityStats, theoryScore, onRestartCase }: Props) {
+  const scoreCategories = theoryScore
+    ? [
+        ['Culprit', theoryScore.culprit],
+        ['Motive', theoryScore.motive],
+        ['Timeline', theoryScore.timeline],
+        ['Evidence', theoryScore.evidence],
+      ] as const
+    : [];
   return (
     <section className="dossier-surface">
       <PanelHeader
@@ -32,6 +41,31 @@ export default function CommunityView({ suspects, communityStats, onRestartCase 
           Replay This Case
         </button>
       </div>
+      {theoryScore ? (
+        <section className="score-card">
+          <div className="score-verdict">
+            <div>
+              <p className="eyebrow">Canonical Verdict</p>
+              <h3>{theoryScore.verdict}</h3>
+            </div>
+            <strong>{theoryScore.total}/{theoryScore.possible}</strong>
+          </div>
+          <div className="score-breakdown">
+            {scoreCategories.map(([label, category]) => (
+              <article key={label} className="score-category">
+                <div><strong>{label}</strong><span>{category.earned}/{category.possible}</span></div>
+                <p>{category.feedback}</p>
+              </article>
+            ))}
+          </div>
+          <div className="canonical-truth">
+            <p className="subheading">Canonical Truth</p>
+            <h3>{suspects.find((suspect) => suspect.id === theoryScore.canonical_truth.culprit_id)?.display_name ?? theoryScore.canonical_truth.culprit_id}</h3>
+            <p><strong>Motive:</strong> {theoryScore.canonical_truth.motive_summary}</p>
+            <p><strong>Timeline:</strong> {theoryScore.canonical_truth.timeline_summary}</p>
+          </div>
+        </section>
+      ) : null}
       <div className="community-grid">
         <section className="intel-card">
           <div className="intel-card-header">
@@ -52,7 +86,7 @@ export default function CommunityView({ suspects, communityStats, onRestartCase 
         </section>
         <section className="intel-card">
           <div className="intel-card-header">
-            <span>Theory Excerpts</span>
+            <span>Accusation Excerpts</span>
             <strong>{communityStats.excerpts.length.toString().padStart(2, '0')}</strong>
           </div>
           <div className="excerpt-stack">

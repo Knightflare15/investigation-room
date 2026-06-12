@@ -18,27 +18,21 @@ class AuthServiceTests(unittest.TestCase):
     def test_register_and_login_player(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = AuthService(Settings(db_path=Path(temp_dir) / "auth.db"))
-            session = service.register("Aryan", "secret123")
+            session = service.register("Aryan", "secret12345")
             self.assertEqual(session.alias, "Aryan")
             self.assertEqual(session.role, "player")
 
-            login = service.login("Aryan", "secret123")
+            login = service.login("Aryan", "secret12345")
             self.assertEqual(login.alias, "Aryan")
             self.assertEqual(login.role, "player")
 
-    def test_admin_alias_requires_secret_code(self) -> None:
+    def test_admin_alias_is_bootstrapped_server_side(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = AuthService(Settings(db_path=Path(temp_dir) / "auth.db"))
-            with self.assertRaises(PermissionError):
-                service.register("Consultant", "secret123")
-
-            session = service.register("Consultant", "secret123", admin_code="change-me")
+            session = service.register("Consultant", "secret12345")
             self.assertEqual(session.role, "admin")
 
-            with self.assertRaises(PermissionError):
-                service.login("Consultant", "secret123")
-
-            login = service.login("Consultant", "secret123", admin_code="change-me")
+            login = service.login("Consultant", "secret12345")
             self.assertEqual(login.role, "admin")
 
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import threading
+import re
 from dataclasses import dataclass
 
-from ..case_loader import load_cases
+from ..case_loader import load_cases, loaded_case_from_bundle
 from ..config import Settings
 from ..database import create_database
 from ..models import (
@@ -25,7 +26,9 @@ from ..models import (
     SearchResult,
     SubmitTheoryRequest,
     SubmitTheoryResponse,
+    ScoreCategory,
     SuspectConfig,
+    TheoryScore,
     TogglePinRequest,
 )
 from .dialogue import DialogueService
@@ -44,10 +47,9 @@ class GameService:
         self.settings = settings
         self.db = create_database(settings.database_url, settings.db_path)
         self._cases_lock = threading.RLock()
-        self.cases = load_cases(settings.cases_path)
+        self.cases = self._load_all_cases()
         self.retrieval = RetrievalService(settings)
         self.dialogue = DialogueService(settings, self.retrieval)
-        self._stream_lead_events: dict[tuple[str, str, str], dict[str, object]] = {}
 
     def _build_lead_messages(
         self,
@@ -69,12 +71,6 @@ class GameService:
             label = suspect.display_name if suspect else suspect_id
             messages.append(f"Lead surfaced: {label} can now be called in after {context_hint} came up.")
         return messages
-
-    def pop_stream_lead_event(self, case_id: str, player_alias: str, suspect_id: str) -> dict[str, object]:
-        return self._stream_lead_events.pop(
-            (case_id, player_alias, suspect_id),
-            {"unlocked_documents": [], "unlocked_suspects": [], "lead_messages": [], "deduction_messages": []},
-        )
 
     def _evaluate_deductions(
         self,
@@ -132,12 +128,18 @@ class GameService:
         return messages
 
     def reload_cases(self) -> None:
-        new_cases = load_cases(self.settings.cases_path)
+        new_cases = self._load_all_cases()
         with self._cases_lock:
             self.cases = new_cases
 
+    def _load_all_cases(self) -> dict[str, LoadedCase]:
+        loaded = load_cases(self.settings.cases_path)
+        for bundle in self.db.list_case_bundles():
+            loaded[bundle.case.id] = loaded_case_from_bundle(bundle)
+        return loaded
+
     def _is_admin(self, alias: str) -> bool:
-        return alias in self.settings.admin_aliases
+        return alias in (self.settings.bootstrap_admin_aliases or self.settings.admin_aliases)
 
     def _can_access_case(self, case: LoadedCase, alias: str | None = None) -> bool:
         if case.config.status == "approved":
@@ -411,11 +413,18 @@ class GameService:
         conversation.transcript.append(ConversationTurn(speaker="detective", text=message))
         if evidence_id:
             conversation.confronted_evidence_ids.append(evidence_id)
-        conversation.transcript.append(ConversationTurn(speaker=suspect.display_name, text=outcome.reply))
+        conversation.transcript.append(
+            ConversationTurn(
+                speaker=suspect.display_name,
+                text=outcome.reply,
+                citations=[result.chunk_id for result in grounding_results],
+            )
+        )
         conversation.trust = max(0, min(100, conversation.trust + outcome.trust_delta))
         conversation.guardedness = max(0, min(100, conversation.guardedness + outcome.guardedness_delta))
         conversation.revealed_fact_ids = list(dict.fromkeys(conversation.revealed_fact_ids + outcome.revealed_fact_ids))
         conversation.memory_summary = f"Topics pressed: {', '.join(outcome.new_context[:4])}" if outcome.new_context else conversation.memory_summary
+        self._compact_long_conversation(suspect, conversation)
 
         state.suspicion_level = max(0, min(100, state.suspicion_level + outcome.suspicion_delta))
         conversation_contexts = self.retrieval.derive_contexts(
@@ -486,6 +495,7 @@ class GameService:
         suspect_id: str,
         message: str,
         grounding_results: list[SearchResult] | None = None,
+        event_sink: dict[str, object] | None = None,
     ):
         """Yield reply tokens for SSE streaming, then persist the streamed reply.
 
@@ -506,15 +516,22 @@ class GameService:
             yield token
         full_reply = "".join(chunks)
 
-        # Deterministic deltas only — reuse the heuristic scorer but keep the streamed text.
-        deltas = self.dialogue.score_reply(suspect, conversation, message, grounding_results, None)
+        # Score the exact visible reply so state cannot advance on facts the suspect never said.
+        deltas = self.dialogue.score_reply(suspect, conversation, message, grounding_results, None, reply=full_reply)
         conversation.transcript.append(ConversationTurn(speaker="detective", text=message))
-        conversation.transcript.append(ConversationTurn(speaker=suspect.display_name, text=full_reply))
+        conversation.transcript.append(
+            ConversationTurn(
+                speaker=suspect.display_name,
+                text=full_reply,
+                citations=[result.chunk_id for result in grounding_results],
+            )
+        )
         conversation.trust = max(0, min(100, conversation.trust + deltas.trust_delta))
         conversation.guardedness = max(0, min(100, conversation.guardedness + deltas.guardedness_delta))
         conversation.revealed_fact_ids = list(dict.fromkeys(conversation.revealed_fact_ids + deltas.revealed_fact_ids))
         if deltas.new_context:
             conversation.memory_summary = f"Topics pressed: {', '.join(deltas.new_context[:4])}"
+        self._compact_long_conversation(suspect, conversation)
         state.suspicion_level = max(0, min(100, state.suspicion_level + deltas.suspicion_delta))
         conversation_contexts = self.retrieval.derive_contexts(
             " ".join(
@@ -559,12 +576,20 @@ class GameService:
         ]
         self._save_conversation(case_id, player_alias, conversation)
         self.db.save_player_state(state)
-        self._stream_lead_events[(case_id, player_alias, suspect_id)] = {
+        stream_event = {
             "unlocked_documents": list(dict.fromkeys(effects.unlocked_documents + deduction_unlocked_documents)),
             "unlocked_suspects": list(dict.fromkeys(effects.unlocked_suspects + deduction_unlocked_suspects)),
             "lead_messages": self._build_lead_messages(case, effects, all_contexts),
             "deduction_messages": [message.model_dump(mode="json") for message in deduction_messages],
         }
+        if event_sink is not None:
+            event_sink.update(stream_event)
+
+    def _compact_long_conversation(self, suspect: SuspectConfig, conversation: ConversationState) -> None:
+        if len(conversation.transcript) <= 20:
+            return
+        conversation.memory_summary = self.dialogue.compact_memory_summary(suspect, conversation)
+        conversation.transcript = conversation.transcript[-8:]
 
     def confront_suspect(self, case_id: str, player_alias: str, suspect_id: str, request: ConfrontRequest) -> DialogueResponse:
         case = self.get_case(case_id)
@@ -624,6 +649,74 @@ class GameService:
         self.db.save_player_state(state)
         return state
 
+    def _concept_match_count(self, answer: str, concepts: list[str]) -> int:
+        stopwords = {
+            "a", "an", "and", "at", "before", "but", "by", "for", "from", "had", "he", "her",
+            "his", "in", "into", "is", "it", "of", "on", "or", "she", "that", "the", "their",
+            "then", "they", "this", "to", "was", "with",
+        }
+        answer_tokens = set(re.findall(r"[a-z0-9]+", answer.lower())) - stopwords
+        matches = 0
+        for concept in concepts:
+            concept_tokens = set(re.findall(r"[a-z0-9]+", concept.lower())) - stopwords
+            if not concept_tokens:
+                continue
+            overlap = len(answer_tokens & concept_tokens) / len(concept_tokens)
+            if overlap >= 0.5:
+                matches += 1
+        return matches
+
+    def _score_text(self, answer: str, concepts: list[str], possible: int, label: str) -> ScoreCategory:
+        if not concepts:
+            return ScoreCategory(earned=0, possible=possible, feedback=f"No canonical {label} concepts were authored.")
+        matched = self._concept_match_count(answer, concepts)
+        earned = round(possible * matched / len(concepts))
+        return ScoreCategory(
+            earned=earned,
+            possible=possible,
+            feedback=f"Matched {matched} of {len(concepts)} canonical {label} concepts.",
+        )
+
+    def _score_theory(self, case: LoadedCase, payload: SubmitTheoryRequest) -> TheoryScore:
+        truth = case.config.submission.canonical_truth
+        culprit_earned = 40 if truth.culprit_id and payload.culprit_id == truth.culprit_id else 0
+        culprit = ScoreCategory(
+            earned=culprit_earned,
+            possible=40,
+            feedback="Correct culprit." if culprit_earned else "The accusation names the wrong culprit.",
+        )
+        motive = self._score_text(payload.motive_text, truth.motive_concepts, 20, "motive")
+        timeline = self._score_text(payload.timeline_text, truth.timeline_concepts, 20, "timeline")
+        expected_evidence = set(truth.evidence_ids)
+        matched_evidence = expected_evidence & set(payload.evidence_ids)
+        evidence_earned = round(20 * len(matched_evidence) / len(expected_evidence)) if expected_evidence else 0
+        evidence = ScoreCategory(
+            earned=evidence_earned,
+            possible=20,
+            feedback=f"Used {len(matched_evidence)} of {len(expected_evidence)} canonical evidence items.",
+        )
+        total = culprit.earned + motive.earned + timeline.earned + evidence.earned
+        verdict = (
+            "Awaiting Canonical Truth"
+            if not truth.culprit_id
+            else "Case Closed"
+            if total >= 85
+            else "Strong Theory"
+            if total >= 65
+            else "Partial Reconstruction"
+            if total >= 40
+            else "Case Unsolved"
+        )
+        return TheoryScore(
+            total=total,
+            verdict=verdict,
+            culprit=culprit,
+            motive=motive,
+            timeline=timeline,
+            evidence=evidence,
+            canonical_truth=truth,
+        )
+
     def submit_theory(self, case_id: str, player_alias: str, payload: SubmitTheoryRequest) -> SubmitTheoryResponse:
         state = self.get_or_create_state(case_id, player_alias)
         case = self.get_case(case_id)
@@ -643,7 +736,7 @@ class GameService:
         state.current_objective = "Review the community split and compare your theory with other detectives."
         self.db.save_player_state(state)
         stats = self.db.get_community_stats(case_id)
-        return SubmitTheoryResponse(saved=True, stats=stats)
+        return SubmitTheoryResponse(saved=True, stats=stats, score=self._score_theory(case, payload))
 
     def get_community_stats(self, case_id: str, player_alias: str) -> CommunityStatsResponse:
         case = self.get_case(case_id)

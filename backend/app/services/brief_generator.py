@@ -10,6 +10,7 @@ from ..models import (
     CaseBriefInput,
     CaseConfig,
     CaseDocument,
+    CanonicalTruth,
     DeductionBeat,
     DeductionRequirements,
     EvidenceDraft,
@@ -27,6 +28,7 @@ from ..models import (
     Trigger,
     TriggerEffects,
     DialogueRules,
+    FactRevealRule,
     MemoryRules,
 )
 
@@ -152,6 +154,12 @@ class BriefGenerationService:
         rescan_rules = self._build_rescan_rules(extracted, suspect_configs, documents, locations)
         board_links = self._build_board_links(extracted, suspect_configs, documents)
         deduction_beats = self._build_deduction_beats(extracted, suspect_configs, documents, board_links)
+        culprit = next(
+            (suspect for suspect in suspect_configs if suspect.display_name.lower() == extracted.culprit_name.lower()),
+            suspect_configs[0],
+        )
+        canonical_evidence_ids = [document.id for document in documents if document.id not in initial_documents][:2]
+        canonical_evidence_ids = list(dict.fromkeys(canonical_evidence_ids + initial_documents[-1:]))[:3]
 
         case_config = CaseConfig(
             id=extracted.case_id,
@@ -175,6 +183,14 @@ class BriefGenerationService:
             submission=SubmissionConfig(
                 required_fields=["culprit_id", "motive_text", "timeline_text", "evidence_ids"],
                 min_evidence_count=min(3, max(2, len(initial_documents))),
+                canonical_truth=CanonicalTruth(
+                    culprit_id=culprit.id,
+                    motive_summary=extracted.motive,
+                    timeline_summary=extracted.solution_summary or " ".join(extracted.timeline[:4]),
+                    motive_concepts=[extracted.motive],
+                    timeline_concepts=extracted.timeline[:4],
+                    evidence_ids=canonical_evidence_ids,
+                ),
             ),
             valid_board_links=board_links,
             deduction_beats=deduction_beats,
@@ -331,6 +347,19 @@ class BriefGenerationService:
                         baseline_tone=self._baseline_tone_from_traits(traits),
                         lie_strategy="deflect until the evidence becomes too specific",
                         pressure_triggers=pressure_triggers,
+                        fact_reveal_rules=[
+                            FactRevealRule(
+                                fact_id=f"fact_{fact_index}",
+                                topics=list(
+                                    dict.fromkeys(
+                                        self._derive_tags_from_text(fact) + pressure_triggers[:2]
+                                    )
+                                )[:5],
+                                min_trust=45 if fact_index < len(private_facts) else 50,
+                                max_guardedness=80 if fact_index < len(private_facts) else 65,
+                            )
+                            for fact_index, fact in enumerate(private_facts + secrets)
+                        ],
                         shut_down_threshold=80 if suspect.name.lower() == culprit else 75,
                     ),
                     memory_rules=MemoryRules(),

@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900">
-  <rect width="1400" height="900" fill="#111416"/>
-  <path d="M240 820 530 140h340l290 680z" fill="#1b2328" stroke="#7f99a3" stroke-width="5"/>
-  <path d="M520 140 330 820M880 140l190 680" stroke="#36464f" stroke-width="7"/>
-  <rect x="620" y="300" width="160" height="220" rx="18" fill="#c8d5da"/>
-  <circle cx="760" cy="410" r="14" fill="#6c4c2f"/>
-  <path d="M360 820h680" stroke="#d9e2e6" stroke-width="8" opacity="0.5"/>
-  <text x="700" y="840" fill="#eef4f7" font-family="Georgia, serif" font-size="60" text-anchor="middle">Service Corridor</text>
-</svg>

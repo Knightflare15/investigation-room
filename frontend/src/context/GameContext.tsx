@@ -3,20 +3,16 @@ import type {
   CaseDetailResponse,
   CaseDocument,
   CaseSummary,
-  ClueCard,
   CommunityStatsResponse,
-  ContradictionItem,
   ConversationState,
   ConversationTurn,
-  DeductionMessage,
   PlayerCaseState,
   RescanResponse,
   SearchResult,
   SessionRole,
+  TheoryScore,
   Suspect,
 } from '../types';
-
-export type ViewMode = 'intake' | 'archive' | 'interrogation' | 'board' | 'submission' | 'community' | 'authoring';
 
 type MediaPreview = { src: string; title: string; eyebrow: string; summary: string };
 
@@ -33,29 +29,23 @@ export type GameState = {
   caseDetail: CaseDetailResponse | null;
   saveState: PlayerCaseState | null;
   conversations: Record<string, ConversationState>;
-  selectedView: ViewMode;
   selectedSuspectId: string;
   selectedDocumentId: string;
   selectedLocationId: string;
   searchQuery: string;
+  rescanFocus: string;
   searchResults: SearchResult[];
-  lastGroundingResults: SearchResult[];
-  leadMessages: string[];
-  deductionMessages: DeductionMessage[];
-  completedDeductions: DeductionMessage[];
   rescanResults: RescanResponse | null;
   communityStats: CommunityStatsResponse | null;
+  theoryScore: TheoryScore | null;
   mediaPreview: MediaPreview | null;
   loading: boolean;
   error: string;
+  activityMessages: string[];
   // derived — kept in state so views don't recompute independently
   unlockedSuspects: Suspect[];
   pinnedDocuments: CaseDocument[];
-  boardNodes: Array<{ id: string; label: string }>;
   folderCounts: Array<[string, number]>;
-  contradictionItems: ContradictionItem[];
-  clueCards: ClueCard[];
-  followUpPrompts: string[];
   suspicionValue: number;
 };
 
@@ -64,7 +54,6 @@ export type GameAction =
   | { type: 'SET_AUTH_SESSION'; payload: { alias: string; role: SessionRole } }
   | { type: 'LOG_OUT' }
   | { type: 'SET_SESSION_ROLE'; payload: SessionRole }
-  | { type: 'SET_VIEW'; payload: ViewMode }
   | { type: 'CLEAR_CASE_CONTEXT' }
   | { type: 'SET_SELECTED_CASE'; payload: string }
   | { type: 'SET_SELECTED_SUSPECT'; payload: string }
@@ -79,17 +68,18 @@ export type GameAction =
   | { type: 'SET_CONVERSATIONS'; payload: Record<string, ConversationState> }
   | { type: 'UPDATE_CONVERSATION'; payload: ConversationState }
   | { type: 'SET_COMMUNITY_STATS'; payload: CommunityStatsResponse }
+  | { type: 'SET_THEORY_SCORE'; payload: TheoryScore | null }
   | { type: 'SET_SEARCH_QUERY'; payload: string }
+  | { type: 'SET_RESCAN_FOCUS'; payload: string }
   | { type: 'SET_SEARCH_RESULTS'; payload: SearchResult[] }
-  | { type: 'SET_LAST_GROUNDING_RESULTS'; payload: SearchResult[] }
-  | { type: 'SET_LEAD_MESSAGES'; payload: string[] }
-  | { type: 'SET_DEDUCTION_MESSAGES'; payload: DeductionMessage[] }
   | { type: 'SET_RESCAN_RESULTS'; payload: RescanResponse }
   | { type: 'CLEAR_RESCAN_RESULTS' }
   | { type: 'SET_MEDIA_PREVIEW'; payload: MediaPreview | null }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_ERROR'; payload: string }
   | { type: 'CLEAR_ERROR' }
+  | { type: 'ADD_ACTIVITY_MESSAGES'; payload: string[] }
+  | { type: 'CLEAR_ACTIVITY_MESSAGES' }
   | { type: 'APPEND_TRANSCRIPT_TURN'; payload: { suspectId: string; turn: ConversationTurn } }
   | { type: 'UPDATE_STREAMING_REPLY'; payload: { suspectId: string; text: string } };
 
@@ -108,28 +98,22 @@ const initialState: GameState = {
   caseDetail: null,
   saveState: null,
   conversations: {},
-  selectedView: 'interrogation',
   selectedSuspectId: '',
   selectedDocumentId: '',
   selectedLocationId: '',
   searchQuery: '',
+  rescanFocus: '',
   searchResults: [],
-  lastGroundingResults: [],
-  leadMessages: [],
-  deductionMessages: [],
-  completedDeductions: [],
   rescanResults: null,
   communityStats: null,
+  theoryScore: null,
   mediaPreview: null,
   loading: false,
   error: '',
+  activityMessages: [],
   unlockedSuspects: [],
   pinnedDocuments: [],
-  boardNodes: [],
   folderCounts: [],
-  contradictionItems: [],
-  clueCards: [],
-  followUpPrompts: [],
   suspicionValue: 0,
 };
 
@@ -156,8 +140,6 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       };
     case 'SET_SESSION_ROLE':
       return { ...state, sessionRole: action.payload };
-    case 'SET_VIEW':
-      return { ...state, selectedView: action.payload };
     case 'CLEAR_CASE_CONTEXT':
       return {
         ...state,
@@ -169,21 +151,16 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         selectedDocumentId: '',
         selectedLocationId: '',
         searchQuery: '',
+        rescanFocus: '',
         searchResults: [],
-        lastGroundingResults: [],
-        leadMessages: [],
-        deductionMessages: [],
-        completedDeductions: [],
         rescanResults: null,
         communityStats: null,
+        theoryScore: null,
         unlockedSuspects: [],
         pinnedDocuments: [],
-        boardNodes: [],
         folderCounts: [],
-        contradictionItems: [],
-        clueCards: [],
-        followUpPrompts: [],
         suspicionValue: 0,
+        activityMessages: [],
       };
     case 'SET_SELECTED_CASE':
       return {
@@ -192,8 +169,10 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         selectedSuspectId: '',
         selectedDocumentId: '',
         selectedLocationId: '',
-        leadMessages: [],
-        deductionMessages: [],
+        searchQuery: '',
+        rescanFocus: '',
+        theoryScore: null,
+        activityMessages: [],
       };
     case 'SET_SELECTED_SUSPECT':
       return { ...state, selectedSuspectId: action.payload };
@@ -221,11 +200,6 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const selectedSuspectId = detail.suspects.some((suspect) => suspect.id === state.selectedSuspectId)
         ? state.selectedSuspectId
         : detail.suspects[0]?.id || '';
-      const boardNodes: Array<{ id: string; label: string }> = [
-        { id: 'victim', label: 'Victim' },
-        ...detail.suspects.map((s) => ({ id: s.id, label: s.display_name })),
-        ...detail.documents.map((d) => ({ id: d.id, label: d.title })),
-      ];
       const folderCounts: Array<[string, number]> = Array.from(
         detail.documents.reduce((acc, d) => {
           acc.set(d.folder, (acc.get(d.folder) ?? 0) + 1);
@@ -235,10 +209,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return {
         ...state,
         caseDetail: detail,
-        lastGroundingResults: [],
-        completedDeductions: detail.completed_deductions,
         unlockedSuspects,
-        boardNodes,
         folderCounts,
         selectedDocumentId,
         selectedLocationId,
@@ -250,39 +221,11 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const ss = action.payload;
       const unlockedDocuments = state.caseDetail?.documents ?? [];
       const pinnedDocuments = unlockedDocuments.filter((d) => ss.pinned_evidence_ids.includes(d.id));
-      const seeds = ss.discovered_contexts;
-      const completed = state.caseDetail?.completed_deductions ?? state.completedDeductions;
-      const contradictionItems: ContradictionItem[] = completed.length
-        ? completed
-            .slice(-4)
-            .reverse()
-            .map((deduction, index) => ({
-              title: deduction.title,
-              severity: (index === 0 ? 'high' : index === 1 ? 'medium' : 'low') as ContradictionItem['severity'],
-              source: deduction.message,
-            }))
-        : seeds
-            .slice(-4)
-            .reverse()
-            .map((context, index) => ({
-              title:
-                index === 0
-                  ? `Fresh inconsistency around ${context}`
-                  : index === 1
-                    ? `${context} keeps resurfacing in separate accounts`
-                    : `${context} may connect two statements that should not align`,
-              severity: (index === 0 ? 'high' : index === 1 ? 'medium' : 'low') as ContradictionItem['severity'],
-              source:
-                index === 0
-                  ? 'Derived from interrogation and archive cross-checks'
-                  : 'Pulled from rescan context and evidence overlap',
-            }));
       return {
         ...state,
         saveState: ss,
         suspicionValue: ss.suspicion_level,
         pinnedDocuments,
-        contradictionItems,
       };
     }
     case 'SET_CONVERSATIONS': {
@@ -290,33 +233,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const selectedSuspect =
         state.caseDetail?.suspects.find((s) => s.id === state.selectedSuspectId) ??
         state.caseDetail?.suspects[0];
-      const activeConversation = selectedSuspect ? convs[selectedSuspect.id] : undefined;
-      const selectedDocument =
-        state.caseDetail?.documents.find((d) => d.id === state.selectedDocumentId) ??
-        state.caseDetail?.documents[0];
-      const tagClues = (selectedDocument?.entity_tags ?? []).slice(0, 4).map((tag, index) => ({
-        text:
-          index === 0
-            ? `${tag} appears central to the document's tension.`
-            : index === 1
-              ? `${tag} may suggest motive, location, or pressure.`
-              : `${tag} should be tested against statements and ledgers.`,
-        type: (index === 0 ? 'location' : index === 1 ? 'intent' : 'behavior') as ClueCard['type'],
-      }));
-      const revealed = (activeConversation?.revealed_fact_ids ?? []).slice(0, 2).map((factId) => ({
-        text: `Conversation breakthrough recorded under ${factId}.`,
-        type: 'mindset' as ClueCard['type'],
-      }));
-      const deductionClues = state.completedDeductions.slice(-2).map((deduction) => ({
-        text: deduction.message,
-        type: 'mindset' as ClueCard['type'],
-      }));
-      const clueCards = [...deductionClues, ...tagClues, ...revealed].slice(0, 4);
-      const base = selectedDocument?.entity_tags?.slice(0, 4) ?? [];
-      const followUpPrompts = base.length
-        ? base.map((tag) => `Ask about ${tag}`)
-        : ['Press the timeline', 'Compare to evidence', 'Test the motive'];
-      return { ...state, conversations: convs, clueCards, followUpPrompts };
+      return { ...state, conversations: convs };
     }
     case 'UPDATE_CONVERSATION': {
       const convs = { ...state.conversations, [action.payload.suspect_id]: action.payload };
@@ -324,23 +241,14 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     }
     case 'SET_COMMUNITY_STATS':
       return { ...state, communityStats: action.payload };
+    case 'SET_THEORY_SCORE':
+      return { ...state, theoryScore: action.payload };
     case 'SET_SEARCH_QUERY':
       return { ...state, searchQuery: action.payload };
+    case 'SET_RESCAN_FOCUS':
+      return { ...state, rescanFocus: action.payload };
     case 'SET_SEARCH_RESULTS':
       return { ...state, searchResults: action.payload };
-    case 'SET_LAST_GROUNDING_RESULTS':
-      return { ...state, lastGroundingResults: action.payload };
-    case 'SET_LEAD_MESSAGES':
-      return { ...state, leadMessages: action.payload };
-    case 'SET_DEDUCTION_MESSAGES': {
-      const nextCompleted = [...state.completedDeductions];
-      for (const deduction of action.payload) {
-        if (!nextCompleted.some((existing) => existing.id === deduction.id)) {
-          nextCompleted.push(deduction);
-        }
-      }
-      return { ...state, deductionMessages: action.payload, completedDeductions: nextCompleted };
-    }
     case 'SET_RESCAN_RESULTS':
       return { ...state, rescanResults: action.payload };
     case 'CLEAR_RESCAN_RESULTS':
@@ -353,6 +261,13 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...state, error: action.payload, loading: false };
     case 'CLEAR_ERROR':
       return { ...state, error: '' };
+    case 'ADD_ACTIVITY_MESSAGES':
+      return {
+        ...state,
+        activityMessages: Array.from(new Set([...state.activityMessages, ...action.payload])).slice(-4),
+      };
+    case 'CLEAR_ACTIVITY_MESSAGES':
+      return { ...state, activityMessages: [] };
     case 'APPEND_TRANSCRIPT_TURN': {
       const { suspectId, turn } = action.payload;
       const existing: ConversationState = state.conversations[suspectId] ?? {

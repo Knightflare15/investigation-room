@@ -5,7 +5,6 @@ import logging
 import math
 import re
 from collections import Counter
-from urllib import error, request
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -19,6 +18,7 @@ from ..models import (
     SourceGrounding,
 )
 from .retrieval import OllamaClient
+from .providers import ProviderUnavailable, create_chat_provider
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,7 @@ class SourceIngestionService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.ollama = OllamaClient(settings)
+        self.chat_provider = create_chat_provider(settings)
 
     def extract(self, payload: CaseIngestionInput) -> tuple[ExtractedCaseDraft, list[SourceGrounding]]:
         source_text = self._normalize(payload.source_text)
@@ -201,7 +202,7 @@ class SourceIngestionService:
             "Extract the main suspects. Include role, public summary, hidden facts, secrets, personality traits, speaking style, verbal tells, outward goal, protective target, and protective reason when supported.",
         )
         suspects = suspect_extraction.suspects if suspect_extraction and suspect_extraction.suspects else heuristic_suspects
-        suspect_method = "ollama" if suspect_extraction and suspect_extraction.suspects else "heuristic"
+        suspect_method = self.chat_provider.name if suspect_extraction and suspect_extraction.suspects else "heuristic"
         if len(suspects) < 2:
             suspects.extend(self._fallback_suspects(chunks, victim, len(suspects)))
             warnings.append("Fewer than two clear suspects were found; fallback suspects were added for playability.")
@@ -214,7 +215,7 @@ class SourceIngestionService:
             "Extract evidence items. Return compact titles, summaries, details, doc_type, folder, tags, and whether each item should stay hidden at first.",
         )
         evidence = evidence_extraction.evidence if evidence_extraction and evidence_extraction.evidence else heuristic_evidence
-        evidence_method = "ollama" if evidence_extraction and evidence_extraction.evidence else "heuristic"
+        evidence_method = self.chat_provider.name if evidence_extraction and evidence_extraction.evidence else "heuristic"
         if not evidence:
             evidence = self._fallback_evidence(premise, setting, truth_chunks)
             warnings.append("No clear evidence objects were found; generated starter documents from source passages.")
@@ -229,7 +230,7 @@ class SourceIngestionService:
         )
         relationships = timeline_relationships.relationships if timeline_relationships and timeline_relationships.relationships else heuristic_relationships
         timeline = timeline_relationships.timeline if timeline_relationships and timeline_relationships.timeline else heuristic_timeline
-        relationship_method = "ollama" if timeline_relationships and (timeline_relationships.relationships or timeline_relationships.timeline) else "heuristic"
+        relationship_method = self.chat_provider.name if timeline_relationships and (timeline_relationships.relationships or timeline_relationships.timeline) else "heuristic"
 
         heuristic_hidden_truth = self._extract_hidden_truth(truth_chunks or chunks)
         heuristic_culprit_name, heuristic_motive, heuristic_solution_summary = self._extract_solution(truth_chunks or suspect_chunks or chunks, suspects)
@@ -242,7 +243,7 @@ class SourceIngestionService:
         culprit_name = solution_extraction.culprit_name.strip() if solution_extraction and solution_extraction.culprit_name.strip() else heuristic_culprit_name
         motive = solution_extraction.motive.strip() if solution_extraction and solution_extraction.motive.strip() else heuristic_motive
         solution_summary = solution_extraction.solution_summary.strip() if solution_extraction and solution_extraction.solution_summary.strip() else heuristic_solution_summary
-        solution_method = "ollama" if solution_extraction and any([solution_extraction.hidden_truth, solution_extraction.culprit_name, solution_extraction.motive, solution_extraction.solution_summary]) else "heuristic"
+        solution_method = self.chat_provider.name if solution_extraction and any([solution_extraction.hidden_truth, solution_extraction.culprit_name, solution_extraction.motive, solution_extraction.solution_summary]) else "heuristic"
         if not culprit_name:
             culprit_name = suspects[0].name
             warnings.append("No explicit culprit was found; defaulted to the strongest suspect candidate.")
@@ -272,10 +273,10 @@ class SourceIngestionService:
         )
 
         groundings = [
-            self._grounding("title", title, title_chunks or chunks[:1], self._confidence_for_method("ollama" if title_premise and title_premise.title.strip() else "heuristic"), "ollama" if title_premise and title_premise.title.strip() else "heuristic"),
-            self._grounding("premise", premise, premise_chunks or chunks[:2], self._confidence_for_method("ollama" if title_premise and title_premise.premise.strip() else "heuristic"), "ollama" if title_premise and title_premise.premise.strip() else "heuristic"),
-            self._grounding("victim", victim, victim_chunks or chunks[:2], self._confidence_for_method("ollama" if victim_setting and victim_setting.victim.strip() else "heuristic"), "ollama" if victim_setting and victim_setting.victim.strip() else "heuristic"),
-            self._grounding("setting", setting, setting_chunks or chunks[:2], self._confidence_for_method("ollama" if victim_setting and victim_setting.setting.strip() else "heuristic"), "ollama" if victim_setting and victim_setting.setting.strip() else "heuristic"),
+            self._grounding("title", title, title_chunks or chunks[:1], self._confidence_for_method(self.chat_provider.name if title_premise and title_premise.title.strip() else "heuristic"), self.chat_provider.name if title_premise and title_premise.title.strip() else "heuristic"),
+            self._grounding("premise", premise, premise_chunks or chunks[:2], self._confidence_for_method(self.chat_provider.name if title_premise and title_premise.premise.strip() else "heuristic"), self.chat_provider.name if title_premise and title_premise.premise.strip() else "heuristic"),
+            self._grounding("victim", victim, victim_chunks or chunks[:2], self._confidence_for_method(self.chat_provider.name if victim_setting and victim_setting.victim.strip() else "heuristic"), self.chat_provider.name if victim_setting and victim_setting.victim.strip() else "heuristic"),
+            self._grounding("setting", setting, setting_chunks or chunks[:2], self._confidence_for_method(self.chat_provider.name if victim_setting and victim_setting.setting.strip() else "heuristic"), self.chat_provider.name if victim_setting and victim_setting.setting.strip() else "heuristic"),
         ]
         groundings.extend(
             self._item_groundings("suspect", [suspect.name for suspect in suspects], suspect_chunks or chunks[:4], suspect_method)
@@ -576,7 +577,7 @@ class SourceIngestionService:
         return [sentence for chunk in chunks for sentence in _sentences(chunk.text)]
 
     def _confidence_for_method(self, method: str) -> str:
-        return "high" if method == "ollama" else "fallback"
+        return "high" if method in {"ollama", "gemini"} else "fallback"
 
     def _extract_json(
         self,
@@ -587,47 +588,26 @@ class SourceIngestionService:
         if not chunks:
             return None
         payload = {
-            "model": self.settings.ollama_chat_model,
-            "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "Return strict JSON only. Do not add markdown fences, commentary, or extra text.",
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "instruction": instruction,
-                            "schema": model_type.model_json_schema(),
-                            "source_chunks": [
-                                {"id": chunk.id, "section_hint": chunk.section_hint, "text": chunk.text}
-                                for chunk in chunks[:6]
-                            ],
-                        },
-                        separators=(",", ":"),
-                    ),
-                },
+            "instruction": instruction,
+            "schema": model_type.model_json_schema(),
+            "source_chunks": [
+                {"id": chunk.id, "section_hint": chunk.section_hint, "text": chunk.text}
+                for chunk in chunks[:6]
             ],
         }
-        req = request.Request(
-            f"{self.settings.ollama_base_url}/api/chat",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with request.urlopen(req, timeout=self.settings.ollama_chat_timeout_seconds) as response:
-                body = json.loads(response.read().decode("utf-8"))
-            content = body.get("message", {}).get("content", "").strip()
+            content = self.chat_provider.complete(
+                "Return strict JSON only. Do not add markdown fences, commentary, or extra text.",
+                payload,
+            )
             if not content:
                 return None
             json_text = self._extract_json_object(content)
             if not json_text:
                 return None
             return model_type.model_validate_json(json_text)
-        except (error.URLError, TimeoutError, json.JSONDecodeError, ValidationError) as exc:
-            logger.warning("Source ingestion Ollama extraction failed; using heuristic fallback: %s", exc)
+        except (ProviderUnavailable, json.JSONDecodeError, ValidationError) as exc:
+            logger.warning("Source ingestion provider extraction failed; using heuristic fallback: %s", exc)
             return None
 
     def _extract_json_object(self, content: str) -> str | None:

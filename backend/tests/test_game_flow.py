@@ -20,6 +20,7 @@ class GameFlowTests(unittest.TestCase):
             ollama_chat_model="fake-chat",
             ollama_embed_model="fake-embed",
             default_alias="Tester",
+            ai_provider="deterministic",
         )
         self.game = GameService(settings)
         self.alias = "Tester"
@@ -137,6 +138,41 @@ class GameFlowTests(unittest.TestCase):
         )
         self.assertTrue(response.saved)
         self.assertEqual(response.stats.culprit_counts["sus_mara"], 1)
+        self.assertEqual(response.score.culprit.earned, 40)
+        self.assertEqual(response.score.possible, 100)
+        self.assertEqual(response.score.canonical_truth.culprit_id, "sus_mara")
+
+    def test_theory_submission_can_earn_perfect_canonical_score(self) -> None:
+        response = self.game.submit_theory(
+            "case-001",
+            self.alias,
+            SubmitTheoryRequest(
+                culprit_id="sus_mara",
+                motive_text="Mara wanted to stop Adrian exposing the business crisis and partnership dissolution.",
+                timeline_text=(
+                    "After Harbor Office contact, Mara used cumulative sedative microdoses. "
+                    "Adrian Vale called Mara Voss at 09:13 PM, and the delayed collapse protected her alibi."
+                ),
+                evidence_ids=["doc_autopsy", "doc_call_log", "doc_detective_supplement", "doc_hotel_ledger"],
+            ),
+        )
+        self.assertEqual(response.score.total, 100)
+        self.assertEqual(response.score.verdict, "Case Closed")
+
+    def test_theory_submission_scores_wrong_accusation_without_hiding_canonical_truth(self) -> None:
+        response = self.game.submit_theory(
+            "case-001",
+            self.alias,
+            SubmitTheoryRequest(
+                culprit_id="sus_ellis",
+                motive_text="He was nervous.",
+                timeline_text="He left dinner.",
+                evidence_ids=["doc_incident", "doc_witness_anna", "doc_autopsy"],
+            ),
+        )
+        self.assertEqual(response.score.culprit.earned, 0)
+        self.assertLess(response.score.total, 40)
+        self.assertEqual(response.score.canonical_truth.culprit_id, "sus_mara")
 
     def test_restart_case_resets_progress_but_keeps_submission_history(self) -> None:
         self.game.talk_to_suspect("case-001", self.alias, "sus_rohan", "What do you know about Lena Orlov?")
@@ -176,6 +212,7 @@ class GameFlowTests(unittest.TestCase):
             # public fields the UI relies on must still be present
             self.assertIn("public_profile", suspect)
             self.assertIn("display_name", suspect)
+        self.assertNotIn("canonical_truth", str(payload))
 
     def test_talk_returns_retrieved_grounding_results(self) -> None:
         response = self.game.talk_to_suspect("case-001", self.alias, "sus_rohan", "What happened with the hotel suite?")
@@ -213,6 +250,7 @@ class GameFlowTests(unittest.TestCase):
             ollama_chat_model="fake-chat",
             ollama_embed_model="fake-embed",
             default_alias="Tester",
+            ai_provider="deterministic",
         )
         fallback_game = GameService(settings)
         response = fallback_game.talk_to_suspect("case-001", self.alias, "sus_rohan", "What do you know about Lena Orlov?")
@@ -228,6 +266,7 @@ class GameFlowTests(unittest.TestCase):
             ollama_chat_model="fake-chat",
             ollama_embed_model="fake-embed",
             default_alias="Tester",
+            ai_provider="deterministic",
         )
         fallback_game = GameService(settings)
         response = fallback_game.talk_to_suspect("case-001", self.alias, "sus_rohan", "Tell me about the hotel records.")
@@ -236,6 +275,85 @@ class GameFlowTests(unittest.TestCase):
         self.assertNotIn("answers in a", response.reply.lower())
         self.assertNotIn("cadence", response.reply.lower())
         self.assertNotIn("voice", response.reply.lower())
+
+    def test_heuristic_dialogue_acknowledges_repeated_questions(self) -> None:
+        settings = Settings(
+            db_path=Path(self.temp_dir.name) / "repeat-test.db",
+            cases_path=Path("cases"),
+            default_alias="Tester",
+            ai_provider="deterministic",
+        )
+        game = GameService(settings)
+        first = game.talk_to_suspect("case-001", self.alias, "sus_rohan", "Where were you during dinner?")
+        second = game.talk_to_suspect("case-001", self.alias, "sus_rohan", "Where were you during dinner?")
+
+        self.assertNotEqual(first.reply, second.reply)
+        self.assertIn("already", second.reply.lower())
+        self.assertNotIn("ask a direct question if you want a direct answer", second.reply.lower())
+
+    def test_dialogue_prompt_prioritizes_natural_turn_by_turn_exchange(self) -> None:
+        case = self.game.get_case("case-001")
+        state = self.game.get_or_create_state("case-001", self.alias)
+        suspect = case.suspects["sus_mara"]
+        conversation = self.game._get_conversation("case-001", self.alias, "sus_mara")
+        payload = self.game.dialogue._build_prompt_payload(
+            suspect,
+            conversation,
+            state,
+            "Why did you change the calendar?",
+            [],
+            None,
+        )
+        rules = payload["output_rules"]
+
+        self.assertIn("latest question directly", rules["conversation"])
+        self.assertIn("natural spoken dialogue", rules["naturalism"])
+        self.assertIn("private acting direction", rules["grounding"])
+
+    def test_authored_fact_reveal_rule_requires_matching_pressure(self) -> None:
+        unrelated = self.game.talk_to_suspect(
+            "case-001",
+            self.alias,
+            "sus_mara",
+            "What happened at the hotel?",
+        )
+        pressured = self.game.talk_to_suspect(
+            "case-001",
+            self.alias,
+            "sus_mara",
+            "Why was the partnership dissolution a financial motive?",
+        )
+
+        self.assertEqual(unrelated.revealed_fact_ids, [])
+        self.assertEqual(pressured.revealed_fact_ids, ["fact_0"])
+
+    def test_visible_reply_controls_whether_eligible_fact_advances(self) -> None:
+        case = self.game.get_case("case-001")
+        state = self.game.get_or_create_state("case-001", self.alias)
+        suspect = case.suspects["sus_mara"]
+        conversation = self.game._get_conversation("case-001", self.alias, "sus_mara")
+        message = "Why was the partnership dissolution a financial motive?"
+        grounding = self.game.get_talk_grounding("case-001", self.alias, "sus_mara", message)
+
+        denial = self.game.dialogue.score_reply(
+            suspect,
+            conversation,
+            message,
+            grounding,
+            None,
+            reply="No. You're reading too much into ordinary business discussions.",
+        )
+        admission = self.game.dialogue.score_reply(
+            suspect,
+            conversation,
+            message,
+            grounding,
+            None,
+            reply="Adrian Vale planned to dissolve the partnership after the quarter closed.",
+        )
+
+        self.assertEqual(denial.revealed_fact_ids, [])
+        self.assertEqual(admission.revealed_fact_ids, ["fact_0"])
 
     def test_begin_interrogation_session_compacts_existing_transcript(self) -> None:
         self.game.talk_to_suspect("case-001", self.alias, "sus_mara", "Tell me about the private booking.")
@@ -252,6 +370,7 @@ class GameFlowTests(unittest.TestCase):
             ollama_chat_model="fake-chat",
             ollama_embed_model="fake-embed",
             default_alias="Tester",
+            ai_provider="deterministic",
         )
         game = GameService(settings)
         case = game.get_case("case-001")
@@ -333,6 +452,7 @@ Summary: Mira used the private meeting to silence the donor.
                 ollama_chat_model="fake-chat",
                 ollama_embed_model="fake-embed",
                 default_alias="Tester",
+                ai_provider="deterministic",
             )
             game = GameService(settings)
             self.assertEqual(game.list_cases(), [])

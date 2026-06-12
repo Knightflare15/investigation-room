@@ -188,6 +188,28 @@
   ],
   "submission": {
     "required_fields": ["culprit_id", "motive_text", "timeline_text", "evidence_ids"],
-    "min_evidence_count": 3
+    "min_evidence_count": 3,
+    "canonical_truth": {
+      "culprit_id": "sus_mara",
+      "motive_summary": "Mara Voss killed Adrian Vale to stop him exposing the business crisis and dissolving their partnership.",
+      "timeline_summary": "Mara arranged contact around the Harbor Office, used Vale's sedative research to create cumulative exposure, spoke with him during the dinner window, and relied on the delayed collapse to protect her alibi.",
+      "motive_concepts": [
+        "business crisis and financial exposure",
+        "partnership dissolution",
+        "stop Adrian Vale from exposing Mara"
+      ],
+      "timeline_concepts": [
+        "Harbor Office contact before the dinner",
+        "cumulative sedative microdoses",
+        "Adrian Vale called Mara Voss at 09:13 PM",
+        "delayed collapse protected Mara's alibi"
+      ],
+      "evidence_ids": [
+        "doc_autopsy",
+        "doc_call_log",
+        "doc_detective_supplement",
+        "doc_hotel_ledger"
+      ]
+    }
   }
 }

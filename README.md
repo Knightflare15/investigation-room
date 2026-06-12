@@ -2,6 +2,8 @@
 
 Investigation Room is a full-stack AI investigation platform built around authored mystery cases. Players browse approved cases from a searchable home screen, open a case, review a police first-pass archive, question suspects through Ollama-backed dialogue, rescan the archive with newly discovered context, and submit a final theory. Admins can do all of that while also reviewing pending draft cases before approval. The project includes a React/Vite dossier interface, a FastAPI backend, persistent player state, and a case authoring pipeline for JSON, Markdown, and visual assets.
 
+Production deployment now supports Gemini, Neon Postgres/pgvector, Cloudflare R2 assets, and Google Cloud Run. Local development continues to support Ollama and SQLite. See `CLOUD_RUN_DEPLOY.md`.
+
 ## Quick start
 
 Open two terminals.
@@ -12,7 +14,6 @@ Backend:
 cd C:\Users\Aryan\Documents\RAG_Project
 .venv\Scripts\Activate.ps1
 $env:INVESTIGATION_ADMIN_ALIASES="Consultant,Admin"
-$env:INVESTIGATION_ADMIN_ACCESS_CODE="change-me"
 uvicorn backend.app.main:app --reload
 ```
 
@@ -103,18 +104,18 @@ The project uses lightweight account auth plus signed sessions.
 - `POST /auth/register` creates an account
 - `POST /auth/login` verifies credentials and returns a signed session
 - `GET /session` returns the signed session identity
-- the frontend stores that token in `localStorage`
+- the backend stores an opaque expiring session and the browser receives an HttpOnly cookie
 - protected API routes require `Authorization: Bearer <token>`
 - aliases listed in `INVESTIGATION_ADMIN_ALIASES` become `admin`
 - all other aliases become `player`
-- admin aliases also require `INVESTIGATION_ADMIN_ACCESS_CODE` during registration and login
+- admin aliases are bootstrapped server-side with `INVESTIGATION_BOOTSTRAP_ADMIN_ALIASES`
 
 Authentication flow:
 
 1. a user registers with `alias + password`
 2. if the alias is admin-listed, the user must also provide the admin access code
-3. login returns a signed bearer token containing alias and role
-4. the frontend restores that session from `localStorage` on reload
+3. login creates a random database-backed session and sets an HttpOnly cookie
+4. the frontend restores the session by calling `GET /session`
 5. protected routes resolve the current `SessionPrincipal` from the bearer token
 
 Role behavior:
@@ -256,7 +257,7 @@ INVESTIGATION_DB_PATH=backend/data/investigation_room.db
 INVESTIGATION_SECRET_KEY=dev-insecure-key
 INVESTIGATION_CORS_ORIGINS=http://localhost:5173
 INVESTIGATION_ADMIN_ALIASES=Consultant,Admin
-INVESTIGATION_ADMIN_ACCESS_CODE=change-me
+INVESTIGATION_BOOTSTRAP_ADMIN_ALIASES=Consultant
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_CHAT_MODEL=llama3.1:8b
 OLLAMA_EMBED_MODEL=nomic-embed-text
@@ -594,7 +595,7 @@ The active interface currently supports:
 The frontend also:
 
 - supports explicit register and login flows
-- restores the current signed session from `localStorage`
+- restores the current HttpOnly-cookie session through `GET /session`
 - resolves the current session role as `player` or `admin`
 - normalizes backend asset URLs to the API origin
 - opens visual attachments in a modal viewer
@@ -660,7 +661,7 @@ npm run build
 
 These are the highest-value human review tasks before presenting or deploying the project:
 
-- Replace development secrets before any demo beyond localhost: set a real `INVESTIGATION_SECRET_KEY`, change `INVESTIGATION_ADMIN_ACCESS_CODE`, and avoid committing real secrets.
+- Replace development secrets before any demo beyond localhost, bootstrap only intended admins, and avoid committing real secrets.
 - Manually author one strong raw-source sample case and run it through `Raw Source Packet` import. Check whether the generated culprit, motive, suspects, and evidence match your intended story.
 - Review generated `SourceGrounding` notes after ingestion. They show which source chunks supported generated fields, but they are not proof that every generated sentence is perfect.
 - Strengthen suspect voice by editing each generated suspect's `personality_profile`, `private_truth`, and `dialogue_rules` in Authoring Studio after ingestion.

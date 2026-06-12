@@ -1,9 +1,16 @@
 import { API_BASE, api, authHeaders } from '../api';
-import type { BoardLinkResponse, DeductionMessage, SubmitTheoryResponse } from '../types';
+import type { SubmitTheoryResponse } from '../types';
 import { useGame } from './GameContext';
 
 export function useGameActions() {
   const { state, dispatch } = useGame();
+
+  function surfaceFeedback(leadMessages: string[] = [], deductionMessages: Array<{ title: string; message: string }> = []) {
+    const messages = [...leadMessages, ...deductionMessages.map((deduction) => `${deduction.title}: ${deduction.message}`)];
+    if (messages.length) {
+      dispatch({ type: 'ADD_ACTIVITY_MESSAGES', payload: messages });
+    }
+  }
 
   async function restoreSession() {
     if (!state.aliasDraft.trim()) return false;
@@ -20,10 +27,10 @@ export function useGameActions() {
     }
   }
 
-  async function register(alias: string, password: string, adminCode?: string) {
+  async function register(alias: string, password: string) {
     dispatch({ type: 'SET_LOADING', payload: true });
     try {
-      const session = await api.register({ alias, password, admin_code: adminCode || null });
+      const session = await api.register({ alias, password });
       dispatch({ type: 'SET_AUTH_SESSION', payload: { alias: session.alias, role: session.role } });
       dispatch({ type: 'CLEAR_ERROR' });
     } catch (e) {
@@ -34,10 +41,10 @@ export function useGameActions() {
     }
   }
 
-  async function login(alias: string, password: string, adminCode?: string) {
+  async function login(alias: string, password: string) {
     dispatch({ type: 'SET_LOADING', payload: true });
     try {
-      const session = await api.login({ alias, password, admin_code: adminCode || null });
+      const session = await api.login({ alias, password });
       dispatch({ type: 'SET_AUTH_SESSION', payload: { alias: session.alias, role: session.role } });
       dispatch({ type: 'CLEAR_ERROR' });
     } catch (e) {
@@ -149,7 +156,7 @@ export function useGameActions() {
     try {
       const response = await api.search(state.selectedCaseId, state.alias, state.searchQuery);
       dispatch({ type: 'SET_SEARCH_RESULTS', payload: response.results });
-      dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
+      surfaceFeedback([], response.deduction_messages);
       if (response.results[0]) dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: response.results[0].document_id });
       await refreshCaseState();
     } catch (e) {
@@ -158,16 +165,26 @@ export function useGameActions() {
   }
 
   async function handleRescan() {
-    if (!state.isAuthenticated || !state.selectedCaseId) return;
+    if (!state.isAuthenticated || !state.selectedCaseId || !state.rescanFocus.trim()) return;
     try {
       const response = await api.rescan(
         state.selectedCaseId,
         state.alias,
-        state.searchQuery || 'Cross-check known contradictions',
+        state.rescanFocus,
         state.selectedLocationId,
       );
       dispatch({ type: 'SET_RESCAN_RESULTS', payload: response });
-      dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
+      const rescanLeads = [
+        ...response.unlocked_documents.map((id) => {
+          const title = state.caseDetail?.documents.find((document) => document.id === id)?.title ?? id;
+          return `New record surfaced: ${title}.`;
+        }),
+        ...response.unlocked_suspects.map((id) => {
+          const name = state.caseDetail?.suspects.find((suspect) => suspect.id === id)?.display_name ?? id;
+          return `New person of interest: ${name}.`;
+        }),
+      ];
+      surfaceFeedback(rescanLeads, response.deduction_messages);
       await refreshCaseState();
       if (response.unlocked_suspects[0]) dispatch({ type: 'SET_SELECTED_SUSPECT', payload: response.unlocked_suspects[0] });
       if (response.unlocked_documents[0]) dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: response.unlocked_documents[0] });
@@ -182,9 +199,7 @@ export function useGameActions() {
     try {
       const response = await api.talk(state.selectedCaseId, suspectId, state.alias, message);
       dispatch({ type: 'UPDATE_CONVERSATION', payload: response.conversation });
-      dispatch({ type: 'SET_LAST_GROUNDING_RESULTS', payload: response.grounding_results });
-      dispatch({ type: 'SET_LEAD_MESSAGES', payload: response.lead_messages });
-      dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
+      surfaceFeedback(response.lead_messages, response.deduction_messages);
       if (state.saveState) {
         dispatch({
           type: 'SET_SAVE_STATE',
@@ -204,7 +219,6 @@ export function useGameActions() {
     try {
       const conversation = await api.beginInterrogationSession(state.selectedCaseId, suspectId, state.alias);
       dispatch({ type: 'UPDATE_CONVERSATION', payload: conversation });
-      dispatch({ type: 'SET_LAST_GROUNDING_RESULTS', payload: [] });
     } catch (e) {
       dispatch({ type: 'SET_ERROR', payload: (e as Error).message });
     }
@@ -222,6 +236,7 @@ export function useGameActions() {
     try {
       const response = await fetch(`${API_BASE}/cases/${selectedCaseId}/suspects/${selectedSuspectId}/talk/stream`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json', ...(await authHeaders(alias)) },
         body: JSON.stringify({ message }),
       });
@@ -236,29 +251,22 @@ export function useGameActions() {
         buffer = lines.pop() ?? '';
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6);
-          if (data.startsWith('[GROUNDING]')) {
-            dispatch({
-              type: 'SET_LAST_GROUNDING_RESULTS',
-              payload: JSON.parse(data.slice('[GROUNDING]'.length)),
-            });
+          const event = JSON.parse(line.slice(6)) as {
+            type: 'grounding' | 'token' | 'leads' | 'error' | 'done';
+            text?: string;
+            unlocked_documents?: string[];
+            unlocked_suspects?: string[];
+            lead_messages?: string[];
+            deduction_messages?: Array<{ title: string; message: string }>;
+          };
+          if (event.type === 'leads') {
+            surfaceFeedback(event.lead_messages, event.deduction_messages);
+            if (event.unlocked_suspects?.[0]) dispatch({ type: 'SET_SELECTED_SUSPECT', payload: event.unlocked_suspects[0] });
+            if (event.unlocked_documents?.[0]) dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: event.unlocked_documents[0] });
             continue;
           }
-          if (data.startsWith('[LEADS]')) {
-            const leadEvent = JSON.parse(data.slice('[LEADS]'.length)) as {
-              unlocked_documents: string[];
-              unlocked_suspects: string[];
-              lead_messages: string[];
-              deduction_messages: DeductionMessage[];
-            };
-            dispatch({ type: 'SET_LEAD_MESSAGES', payload: leadEvent.lead_messages });
-            dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: leadEvent.deduction_messages ?? [] });
-            if (leadEvent.unlocked_suspects[0]) dispatch({ type: 'SET_SELECTED_SUSPECT', payload: leadEvent.unlocked_suspects[0] });
-            if (leadEvent.unlocked_documents[0]) dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: leadEvent.unlocked_documents[0] });
-            continue;
-          }
-          if (!data.includes('[DONE]') && !data.includes('[ERROR]')) {
-            accumulated += data;
+          if (event.type === 'token' && event.text) {
+            accumulated += event.text;
             dispatch({ type: 'UPDATE_STREAMING_REPLY', payload: { suspectId: selectedSuspectId, text: accumulated } });
           }
         }
@@ -277,23 +285,13 @@ export function useGameActions() {
     try {
       const response = await api.confront(state.selectedCaseId, suspectId, state.alias, evidenceId, message);
       dispatch({ type: 'UPDATE_CONVERSATION', payload: response.conversation });
-      dispatch({ type: 'SET_LAST_GROUNDING_RESULTS', payload: response.grounding_results });
-      dispatch({ type: 'SET_LEAD_MESSAGES', payload: response.lead_messages });
-      dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
+      surfaceFeedback(response.lead_messages, response.deduction_messages);
       await refreshCaseState();
       if (response.unlocked_suspects[0]) dispatch({ type: 'SET_SELECTED_SUSPECT', payload: response.unlocked_suspects[0] });
       if (response.unlocked_documents[0]) dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: response.unlocked_documents[0] });
     } catch (e) {
       dispatch({ type: 'SET_ERROR', payload: (e as Error).message });
     }
-  }
-
-  async function handleBoardLink(source: string, target: string, linkType: string, notes: string): Promise<BoardLinkResponse> {
-    if (!state.isAuthenticated || !state.selectedCaseId) throw new Error('No case selected');
-    const response = await api.addBoardLink(state.selectedCaseId, state.alias, source, target, linkType, notes);
-    dispatch({ type: 'SET_DEDUCTION_MESSAGES', payload: response.deduction_messages });
-    await refreshCaseState();
-    return response;
   }
 
   async function handleSubmitTheory(culpritId: string, motive: string, timeline: string): Promise<SubmitTheoryResponse> {
@@ -307,6 +305,7 @@ export function useGameActions() {
       state.saveState.pinned_evidence_ids,
     );
     dispatch({ type: 'SET_COMMUNITY_STATS', payload: response.stats });
+    dispatch({ type: 'SET_THEORY_SCORE', payload: response.score });
     await refreshCaseState();
     return response;
   }
@@ -319,15 +318,16 @@ export function useGameActions() {
     dispatch({ type: 'SET_SELECTED_DOCUMENT', payload: restarted.state.unlocked_document_ids[0] ?? '' });
     dispatch({ type: 'SET_SELECTED_LOCATION', payload: state.caseDetail?.location_dossiers[0]?.id ?? '' });
     dispatch({ type: 'SET_SEARCH_QUERY', payload: '' });
+    dispatch({ type: 'SET_RESCAN_FOCUS', payload: '' });
     dispatch({ type: 'SET_SEARCH_RESULTS', payload: [] });
     dispatch({ type: 'SET_CONVERSATIONS', payload: {} });
-    dispatch({ type: 'SET_LAST_GROUNDING_RESULTS', payload: [] });
-    dispatch({ type: 'SET_LEAD_MESSAGES', payload: [] });
     dispatch({ type: 'CLEAR_RESCAN_RESULTS' });
+    dispatch({ type: 'SET_THEORY_SCORE', payload: null });
+    dispatch({ type: 'CLEAR_ACTIVITY_MESSAGES' });
     await refreshCaseState();
   }
 
-  async function deleteDraftCase(caseId: string): Promise<void> {
+  async function deleteCase(caseId: string): Promise<void> {
     if (!state.isAuthenticated) return;
     try {
       await api.deleteAuthoringCase(caseId, state.alias);
@@ -378,10 +378,9 @@ export function useGameActions() {
     handleTalk,
     handleTalkStreaming,
     handleConfront,
-    handleBoardLink,
     handleSubmitTheory,
     restartCase,
-    deleteDraftCase,
+    deleteCase,
     handleTogglePin,
   };
 }

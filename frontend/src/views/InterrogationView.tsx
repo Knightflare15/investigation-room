@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from 'react';
-import type { CaseDetailResponse, CaseDocument, ClueCard, ConversationState, DeductionMessage, PlayerCaseState, SearchResult, Suspect } from '../types';
+import type { CaseDetailResponse, CaseDocument, ConversationState, PlayerCaseState, Suspect } from '../types';
 import { MediaPlate, PanelHeader } from '../ui';
 
 type Props = {
@@ -8,13 +8,9 @@ type Props = {
   selectedSuspect: Suspect | undefined;
   selectedDocument: CaseDocument | undefined;
   conversations: Record<string, ConversationState>;
-  clueCards: ClueCard[];
-  groundingResults: SearchResult[];
-  leadMessages: string[];
-  deductionMessages: DeductionMessage[];
-  followUpPrompts: string[];
   onTalk: (message: string) => Promise<void>;
   onConfront: (evidenceId: string, message: string) => Promise<void>;
+  onBeginNewSession: () => Promise<void>;
   onOpenAttachment: (doc: CaseDocument | null) => void;
 };
 
@@ -23,17 +19,14 @@ export default function InterrogationView({
   selectedSuspect,
   selectedDocument,
   conversations,
-  clueCards,
-  groundingResults,
-  leadMessages,
-  deductionMessages,
-  followUpPrompts,
   onTalk,
   onConfront,
+  onBeginNewSession,
   onOpenAttachment,
 }: Props) {
   const [messageDraft, setMessageDraft] = useState('');
   const [confrontEvidenceId, setConfrontEvidenceId] = useState('');
+  const [confrontDraft, setConfrontDraft] = useState('');
 
   const activeConversation = selectedSuspect ? conversations[selectedSuspect.id] : undefined;
 
@@ -48,8 +41,30 @@ export default function InterrogationView({
 
   async function handleConfront() {
     if (!selectedSuspect || !confrontEvidenceId) return;
-    await onConfront(confrontEvidenceId, `Explain this evidence: ${confrontEvidenceId}`);
+    const evidence = caseDetail.documents.find((document) => document.id === confrontEvidenceId);
+    const question = confrontDraft.trim() || `What does ${evidence?.title ?? 'this evidence'} tell me that you haven't?`;
+    setConfrontDraft('');
+    await onConfront(confrontEvidenceId, question);
   }
+
+  async function handleBeginNewSession() {
+    if (activeConversation?.transcript.length && !window.confirm('Start a new session? The current transcript will be compacted into memory.')) {
+      return;
+    }
+    await onBeginNewSession();
+  }
+
+  const posture =
+    (activeConversation?.guardedness ?? 25) >= 70
+      ? 'Shutting Down'
+      : (activeConversation?.guardedness ?? 25) >= 45
+        ? 'Defensive'
+        : (activeConversation?.trust ?? 50) >= 60
+          ? 'Cooperative'
+          : 'Careful';
+  const confrontedEvidence = caseDetail.documents.filter((document) =>
+    activeConversation?.confronted_evidence_ids.includes(document.id),
+  );
 
   if (!selectedSuspect) {
     return (
@@ -106,98 +121,10 @@ export default function InterrogationView({
               <p className="document-summary">
                 {selectedDocument?.summary ?? 'Use the archive and pinned wall to focus the interrogation.'}
               </p>
-              <div className="tag-row">
-                {(selectedDocument?.entity_tags ?? []).map((tag) => (
-                  <span key={tag} className="tag">
-                    {tag}
-                  </span>
-                ))}
-              </div>
               <pre>{selectedDocument?.body ?? 'No evidence text loaded.'}</pre>
             </div>
           </div>
         </article>
-
-        <aside className="interrogation-sidebar">
-          <section className="intel-card">
-            <div className="intel-card-header">
-              <span>Interrogation Workspace</span>
-              <strong>Live</strong>
-            </div>
-            <div className="workspace-question">
-              <p className="subheading">Focus Question</p>
-              <p>
-                {selectedDocument
-                  ? `What is the significance of "${selectedDocument.entity_tags[0] ?? selectedDocument.title}" in this record?`
-                  : 'What is the suspect trying to avoid?'}
-              </p>
-            </div>
-            <div className="clue-card-stack">
-              {clueCards.map((clue, index) => (
-                <div key={`${clue.text}-${index}`} className={`clue-card clue-${clue.type.toLowerCase()}`}>
-                  <span>{clue.text}</span>
-                  <strong>{clue.type}</strong>
-                </div>
-              ))}
-            </div>
-            <div className="prompt-chip-row">
-              {followUpPrompts.map((prompt) => (
-                <button key={prompt} className="prompt-chip" onClick={() => setMessageDraft(prompt)}>
-                  {prompt}
-                </button>
-              ))}
-            </div>
-            {groundingResults.length ? (
-              <div className="workspace-question">
-                <p className="subheading">Retrieved Evidence Context</p>
-                <div className="intel-list">
-                  {groundingResults.map((result) => (
-                    <div key={`${result.document_id}-${result.title}`} className="intel-row">
-                      <strong>{result.title}</strong>
-                      <span>{result.snippet}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {leadMessages.length ? (
-              <div className="workspace-question new-leads-panel">
-                <p className="subheading">New Leads</p>
-                <div className="intel-list">
-                  {leadMessages.map((lead, index) => (
-                    <div key={`${lead}-${index}`} className="intel-row">
-                      <strong>Lead {index + 1}</strong>
-                      <span>{lead}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {deductionMessages.length ? (
-              <div className="workspace-question new-leads-panel">
-                <p className="subheading">Deduction Confirmed</p>
-                <div className="intel-list">
-                  {deductionMessages.map((deduction) => (
-                    <div key={deduction.id} className="intel-row">
-                      <strong>{deduction.title}</strong>
-                      <span>{deduction.message}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </section>
-
-          {activeConversation?.memory_summary ? (
-            <section className="intel-card">
-              <div className="intel-card-header">
-                <span>Previous Session</span>
-                <strong>Retained</strong>
-              </div>
-              <p className="document-summary">{activeConversation.memory_summary}</p>
-            </section>
-          ) : null}
-        </aside>
 
         <article className="conversation-docket">
           <div className="conversation-titlebar">
@@ -206,10 +133,18 @@ export default function InterrogationView({
               <span>Session file recorded against the current case state</span>
             </div>
             <div className="conversation-metrics">
-              <div className="metric-chip">Trust {activeConversation?.trust ?? 50}</div>
-              <div className="metric-chip">Guardedness {activeConversation?.guardedness ?? 25}</div>
+              <div className="metric-chip">{posture}</div>
+              <button className="dossier-button dossier-button-ghost" type="button" onClick={() => void handleBeginNewSession()}>
+                Start New Session
+              </button>
             </div>
           </div>
+          {confrontedEvidence.length ? (
+            <div className="confronted-evidence-strip">
+              <strong>Evidence confronted:</strong>
+              <span>{confrontedEvidence.map((document) => document.title).join(', ')}</span>
+            </div>
+          ) : null}
           <div className="conversation-log">
             {(
               activeConversation?.transcript.length
@@ -217,9 +152,7 @@ export default function InterrogationView({
                 : [
                     {
                       speaker: 'System',
-                      text: activeConversation?.memory_summary
-                        ? 'New interrogation session started. Use the previous-session brief and press for specifics.'
-                        : 'Begin the interrogation and press for the hidden inconsistency.',
+                      text: 'Begin the interrogation.',
                     },
                   ]
             ).map((turn, index) => (
@@ -233,7 +166,7 @@ export default function InterrogationView({
             <textarea
               value={messageDraft}
               onChange={(e) => setMessageDraft(e.target.value)}
-              placeholder="Ask about the deed, the ledger, the hidden meeting, the office call, or any contradiction you have uncovered."
+              placeholder="Question the suspect..."
             />
             <div className="conversation-actions">
               <button className="dossier-button dossier-button-accent" type="submit">
@@ -247,6 +180,11 @@ export default function InterrogationView({
                   </option>
                 ))}
               </select>
+              <input
+                value={confrontDraft}
+                onChange={(event) => setConfrontDraft(event.target.value)}
+                placeholder="Ask a specific question about the evidence..."
+              />
               <button className="dossier-button dossier-button-ghost" type="button" onClick={handleConfront}>
                 Confront with Evidence
               </button>

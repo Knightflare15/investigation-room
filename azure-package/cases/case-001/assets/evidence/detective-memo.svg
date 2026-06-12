@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
-  <rect width="1200" height="800" fill="#171110"/>
-  <rect x="210" y="90" width="780" height="620" rx="18" fill="#f1e4cc" stroke="#bb9b65" stroke-width="4"/>
-  <path d="M300 180h520M300 250h520M300 320h490M300 390h520M300 460h420" stroke="#5e4330" stroke-width="10" stroke-linecap="round"/>
-  <path d="M760 510c52 0 94 42 94 94" fill="none" stroke="#b14f3e" stroke-width="14"/>
-  <path d="M842 580l42 42" stroke="#b14f3e" stroke-width="14" stroke-linecap="round"/>
-  <text x="600" y="690" fill="#4a2d1f" font-family="Georgia, serif" font-size="54" text-anchor="middle">Supplementary Memo</text>
-</svg>

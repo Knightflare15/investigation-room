@@ -5,6 +5,120 @@ Each entry lists what changed, which files were touched, and why.
 
 ---
 
+## Session 10 - Fairer and More Satisfying Investigation Loop (2026-06-12)
+
+- Added authored fact-reveal rules with topic, evidence, trust, and guardedness gates; generated,
+  scaffolded, and bundled cases now receive reveal rules instead of advancing facts from any
+  generic pressure trigger.
+- Aligned dialogue consequences with the exact visible reply so streamed or provider-generated
+  denials cannot silently reveal facts or advance hidden state.
+- Preserved interrogation transcripts during normal navigation; players now explicitly start a
+  new session when they want the current transcript compacted into suspect memory.
+- Improved evidence confrontations with player-written questions, evidence titles instead of
+  internal IDs, inline confronted-evidence history, and behavioral posture labels in place of raw
+  trust and guardedness numbers.
+- Surfaced lightweight dismissible lead and deduction notifications, separated archive search
+  from rescan focus, translated rescan outcomes into player-facing labels, and added accusation
+  readiness checks.
+- Added reveal-gate, reply-alignment, and generated-authoring regression coverage. Backend
+  unittest discovery passes with 50 tests and one optional Postgres-driver skip; frontend
+  production build passes.
+
+---
+
+## Session 9 - Natural Interrogation Dialogue (2026-06-12)
+
+- Reworked deterministic interrogation fallback replies to respond to accusation, motive,
+  timeline, person, evidence, and repeated-question cues instead of repeating generic refusals.
+- Added strategy-specific evidence reactions, varied fact-reveal phrasing, contractions, and
+  selective protective pushback so offline and provider-failure conversations feel more spoken.
+- Strengthened provider prompt rules to answer the latest question directly, acknowledge prior
+  turns, vary phrasing, and keep personality and dialogue-rule metadata as private acting
+  direction.
+- Added regression coverage for repeated-question continuity and the natural-conversation prompt
+  contract. Focused game-flow and streaming tests pass.
+
+---
+
+## Session 8 - Canonical Truth and Accusation Scoring (2026-06-12)
+
+- Added a private canonical-truth rubric to case submission config with culprit, motive, timeline,
+  and canonical evidence.
+- Added deterministic 100-point accusation scoring: culprit 40, motive 20, timeline 20, and
+  evidence 20, with verdict tiers and category feedback.
+- The canonical truth and score are revealed only after accusation submission; public case detail
+  continues to hide the authored solution during play.
+- Added a post-submission result card to the Community screen and canonical-truth JSON editing to
+  the authoring studio.
+- Added canonical rubrics to scaffolded, brief-generated, source-ingested, and bundled Ashdown
+  cases, plus scoring and privacy regression coverage.
+- Focused backend tests and frontend production build pass.
+
+---
+
+## Session 7 - Simplified Investigation UI (2026-06-12)
+
+- Removed the Evidence Board route, navigation, React Flow implementation, board-link frontend
+  action, and `@xyflow/react` dependency.
+- Replaced board/theory language with a direct accusation path while retaining the existing
+  theory-submission backend flow.
+- Removed player-facing hint and progress surfaces: contradiction log, theory progress, proven
+  deductions, current objective, interrogation clue cards, follow-up prompts, retrieved context,
+  lead and deduction callouts, open questions, archive domains, entity tags, and example-filled
+  prompts.
+- Collapsed the case workspace and interrogation layouts after removing their now-empty sidebars.
+- Frontend production build passes.
+
+---
+
+## Session 6 - Admin Case and Draft Deletion (2026-06-12)
+
+- Extended the existing authoring deletion path so admins can delete approved cases as well as
+  any draft, while non-admin owners remain limited to deleting their own drafts.
+- Case deletion now removes database bundles, version history, normalized documents, retrieval
+  chunks, uploaded-asset metadata, player progress, conversations, theory submissions, local
+  files, and the corresponding R2 asset prefix while retaining the deletion audit record.
+- Added admin delete controls to approved case cards and the authoring editor, with destructive
+  action confirmation and refreshed library state after deletion.
+- Aligned authoring-service admin checks with server-bootstrapped admin identities.
+- Added deletion regression coverage. Backend unittest discovery and frontend production build
+  pass.
+
+---
+
+## Session 5 - Production, Gemini, and Stateless Deployment (2026-06-12)
+
+The app was upgraded for a near-free public beta deployment on Cloud Run, Neon Postgres, R2,
+and Gemini while preserving Ollama and filesystem adapters for local development.
+
+### Production and security
+
+- Replaced stateless signed identity tokens with expiring opaque database sessions and HttpOnly
+  cookies; added logout revocation, Argon2 support, server-bootstrapped admins, rate limits,
+  request-size limits, secure headers, request IDs, and liveness/readiness endpoints.
+- Added strict request validation, draft quotas, optimistic case versions, audit records, and
+  PNG/JPEG/WebP upload size, MIME, and file-signature validation.
+- Removed the duplicate tracked `azure-package/` deployment snapshot and generated Azure ZIP.
+
+### RAG, LLM, and storage
+
+- Added Gemini/Ollama provider interfaces with retries, circuit breaking, deterministic fallback,
+  and provider contract tests.
+- Reworked retrieval around stable token-window chunks and hybrid lexical/vector reciprocal-rank
+  scoring; added retrieval evaluation thresholds and dialogue citation persistence.
+- Limited dialogue prompts to policy-approved facts and validate generated replies before
+  streaming or persistence.
+- Added database-backed case bundles, versions, normalized documents, retrieval chunks,
+  pgvector migration support, and R2 asset storage with local fallback.
+
+### Deployment and verification
+
+- Added Cloud Run deployment documentation, GitHub Actions verification/deployment workflows,
+  an idempotent repository-case importer, and a non-root production container.
+- Backend unittest discovery passes with 43 tests. Frontend production build passes.
+
+---
+
 ## Session 4 - Deduction Payoff System (2026-06-08)
 
 The game loop now has an authored payoff layer for detective deductions. Instead of only
